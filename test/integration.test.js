@@ -491,3 +491,55 @@ test('OAuth provider failure shows a retry page and preserves existing mailbox',
  const html=await response.text();assert.match(html,/Microsoft/);assert.match(html,/重新连接/);assert.doesNotMatch(html,/登录请求失效/);
  assert.equal(await env.DB.prepare('SELECT * FROM oauth WHERE state=?').bind('test-state').first(),null);
 });
+
+test('group owners can edit published work without changing assignment state',async()=>{
+ const env={DB:database()},origin='https://campus.example',tokens={owner:random(),member:random(),outsider:random()};
+ for(const [id,token] of Object.entries(tokens)){
+  await env.DB.prepare('INSERT INTO users(id,email,password_hash,created) VALUES(?,?,?,0)').bind(id,id+'@example.com','unused').run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,id).run();
+ }
+ const call=(actor,path,method='GET',data)=>worker.fetch(new Request(origin+'/api/'+path,{method,headers:{Cookie:'campus_session='+tokens[actor],Origin:origin,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined}),env);
+ const group=await (await call('owner','groups','POST',{name:'Original group'})).json();
+ const base=`groups/${group.id}`;
+ await env.DB.prepare("INSERT INTO group_members(group_id,user_id,role,joined) VALUES(?,'member','member',0)").bind(group.id).run();
+ await env.DB.prepare("INSERT INTO subscriptions(id,data,created,user_id) VALUES('member-push','{}',0,'member')").run();
+ const {id:projectId}=await (await call('owner',base+'/projects','POST',{title:'Project'})).json();
+ assert.equal((await call('member',base,'PATCH',{name:'Forbidden'})).status,403);
+ assert.equal((await call('owner',base,'PATCH',{name:'New group name'})).status,200);
+ assert.equal((await call('owner',base+'/projects/'+projectId,'PATCH',{title:'New project name',notes:'Project details'})).status,200);
+ const candidate=await (await call('owner',base+'/projects','POST',{projectId,title:'Open task'})).json();
+ assert.equal((await call('member',`task-candidates/${candidate.id}/apply`,'POST',{})).status,200);
+ const editOpen={title:'Revised open task',notes:'Open details',due:null,updated:candidate.updated};
+ assert.equal((await call('owner',base+'/candidates/'+candidate.id,'PATCH',editOpen)).status,200);
+ assert.equal((await call('owner',base+'/candidates/'+candidate.id,'PATCH',editOpen)).status,409);
+ const review=await call('owner',`task-candidates/${candidate.id}/review`,'POST',{decision:'confirm',changes:{proposedAssigneeId:'member'}});
+ assert.equal(review.status,200);
+ const task=await review.json(),path=base+'/tasks/'+task.id,due=Date.now()+7*86400000;
+ assert.equal(task.title,editOpen.title);
+ assert.equal(task.acceptance_status,'pending');
+ const patch={title:'Published update',notes:'Updated scope',due,version:task.version};
+ assert.equal((await call('member',path,'PATCH',patch)).status,403);
+ assert.equal((await call('outsider',path,'PATCH',patch)).status,404);
+ assert.equal((await call('owner',path,'PATCH',patch)).status,200);
+ assert.equal((await call('owner',path,'PATCH',patch)).status,409);
+ const accepted=await call('member',`tasks/${task.id}/assignment`,'POST',{decision:'accept'});
+ assert.equal(accepted.status,200);
+ const current=await accepted.json(),newDue=due+86400000;
+ assert.equal((await call('owner',path,'PATCH',{...patch,title:'Final title',due:newDue,version:current.version})).status,200);
+ const old=await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE task_id=? AND version=? AND state='pending'").bind(task.id,current.version).first();
+ const fresh=await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE task_id=? AND version=? AND state='pending'").bind(task.id,current.version+1).first();
+ assert.equal(old.n,0);
+ assert.ok(fresh.n>0);
+ const snapshot=await (await call('member',base)).json();
+ assert.equal(snapshot.group.name,'New group name');
+ assert.equal(snapshot.projects[0].title,'New project name');
+ assert.equal(snapshot.projects[0].notes,'Project details');
+ assert.equal(snapshot.candidates[0].title,'Final title');
+ assert.equal(snapshot.applications[0].status,'approved');
+ const [personal]=await (await call('member','tasks')).json();
+ assert.equal(personal.title,'Final title');
+ assert.equal(personal.notes,'Updated scope');
+ assert.equal(personal.due,newDue);
+ assert.equal(personal.acceptance_status,'accepted');
+ assert.equal(personal.user_id,'member');
+});

@@ -11,7 +11,7 @@ import { getKV,setKV,startOAuth,finishOAuth,syncMail,preGenerateMailTranslations
 import { applyNameAliases,applyPreferredNameToFields } from './names.js';
 import { normalizeDigestRecord } from './digest-format.js';
 import { scheduleTask,repeatTasks,deliver,makeDigest,enqueue } from './jobs.js';
-import { projectAction,applyForTask,updateGroup,listInvitations,respondInvitation,manageMember,addGroupMember,createGroup,createTaskCandidate,groupSnapshot,listGroups,respondToAssignment,reviewTaskCandidate } from './collaboration.js';
+import { projectAction,applyForTask,updateGroup,editGroupWork,listInvitations,respondInvitation,manageMember,addGroupMember,createGroup,createTaskCandidate,groupSnapshot,listGroups,respondToAssignment,reviewTaskCandidate } from './collaboration.js';
 import { changeMeeting,confirmMeetingProposal,createMeetingPoll,meetingPollSnapshot,openMeetingVote,submitAvailability,voteMeetingProposal } from './meetings.js';
 const json=(data,status=200)=>Response.json(data,{status});
 async function body(request){if(Number(request.headers.get('content-length'))>7*1024*1024)throw new Error('请求过大');const text=await request.text();if(text.length>7*1024*1024)throw new Error('请求过大');return JSON.parse(text);}
@@ -159,6 +159,8 @@ async function routes(request,env,ctx){
   const suggestionId=path.match(/^\/api\/mail-suggestions\/([\w-]+)$/)?.[1];
   if(suggestionId&&method==='POST')return json(await reviewMailSuggestion(env,account.user_id,suggestionId,await body(request)));
 
+  const groupWork=path.match(/^\/api\/groups\/([\w-]+)\/(projects|candidates|tasks)\/([\w-]+)$/);
+  if(groupWork&&method==='PATCH')return json(await editGroupWork(env,account.user_id,groupWork[1],groupWork[2],groupWork[3],await body(request)));
   const projectGroup=path.match(/^\/api\/groups\/([\w-]+)\/projects$/)?.[1];
   if(projectGroup&&method==='POST')return json(await projectAction(env,account.user_id,projectGroup,await body(request)),201);
   const applyCandidate=path.match(/^\/api\/task-candidates\/([\w-]+)\/apply$/)?.[1];
@@ -369,7 +371,7 @@ async function routes(request,env,ctx){
   if(path==='/api/test-notification'&&method==='POST'){
  if(!env.VAPID_PUBLIC_KEY||!env.VAPID_PRIVATE_KEY)return json({error:wording(account.locale,'系统通知尚未配置','系統通知尚未設定','Push notifications are not configured.')},400);
  if(!await env.DB.prepare('SELECT id FROM subscriptions WHERE user_id=? LIMIT 1').bind(account.user_id).first())return json({error:wording(account.locale,'请先在此设备启用通知','請先在此裝置啟用通知','Enable notifications on this device first.')},400);
- await enqueue(env,'test:'+crypto.randomUUID(),null,Date.now(),{title:wording(account.locale,'校园清单 · 测试提醒','校園清單 · 測試提醒','Campus Companion · Test'),body:wording(account.locale,'收到这条消息表示推送已接通。','收到此訊息表示推送已接通。','Receiving this confirms that push works.'),url:'/'},{push:true,email:false},account.user_id);await deliver(env);return json({ok:true});
+ await enqueue(env,'test:'+crypto.randomUUID(),null,Date.now(),{title:wording(account.locale,'Campus Companion · 测试提醒','Campus Companion · 測試提醒','Campus Companion · Test'),body:wording(account.locale,'收到这条消息表示推送已接通。','收到此訊息表示推送已接通。','Receiving this confirms that push works.'),url:'/'},{push:true,email:false},account.user_id);await deliver(env);return json({ok:true});
  }
   return json({error:serverMessage('页面不存在',uiLocale)},404);
 }
