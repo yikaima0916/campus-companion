@@ -106,12 +106,22 @@ export async function addGroupMember(env,actorId,groupId,email){
   return {ok:true,status:'pending'};
 }
 
-export async function createTaskCandidate(env,actorId,groupId,input){
+export async function createTaskCandidate(env,actorId,groupId,input,projectId=null){
   await membership(env,groupId,actorId);
   const candidate=new TaskCandidate(input);
   if(candidate.proposedAssigneeId&&!await memberExists(env,groupId,candidate.proposedAssigneeId))throw new CollaborationError('建议负责人不是小组成员',400);
   const now=Date.now(),row={id:crypto.randomUUID(),group_id:groupId,creator_user_id:actorId,proposed_assignee_id:candidate.proposedAssigneeId,title:candidate.title,notes:candidate.notes,due:candidate.due,evidence:candidate.evidence,status:'pending',created:now,updated:now};
-  await env.DB.prepare('INSERT INTO task_candidates(id,group_id,creator_user_id,proposed_assignee_id,title,notes,due,evidence,status,created,updated) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(row.id,row.group_id,row.creator_user_id,row.proposed_assignee_id,row.title,row.notes,row.due,JSON.stringify(row.evidence),row.status,now,now).run();
+  const result=await env.DB.prepare(`INSERT INTO task_candidates(id,group_id,creator_user_id,proposed_assignee_id,title,notes,due,evidence,status,created,updated,project_id)
+    SELECT ?,?,?,?,?,?,?,?,?,?,?,? WHERE ? IS NULL OR NOT EXISTS (
+      SELECT 1 FROM task_candidates c LEFT JOIN tasks t ON t.candidate_id=c.id
+      WHERE c.group_id=? AND c.project_id=? AND (
+        (c.status='pending' AND c.title=? AND c.notes=? AND c.due IS ? AND c.proposed_assignee_id IS ?)
+        OR (t.completed=0 AND t.acceptance_status IN ('pending','accepted')
+          AND t.title=? AND t.notes=? AND t.due IS ? AND t.user_id IS ?)
+      )
+    )`).bind(row.id,row.group_id,row.creator_user_id,row.proposed_assignee_id,row.title,row.notes,row.due,JSON.stringify(row.evidence),row.status,now,now,projectId,projectId,groupId,projectId,
+      row.title,row.notes,row.due,row.proposed_assignee_id,row.title,row.notes,row.due,row.proposed_assignee_id).run();
+  if(!result.meta.changes)throw new CollaborationError('此项目已有相同的未完成子任务',409);
   return row;
 }
 
@@ -249,6 +259,32 @@ export async function editGroupWork(env,actorId,groupId,kind,id,input){
  return {ok:true};
 }
 
+export async function deleteGroupTask(env,actorId,groupId,kind,id,input){
+ const access=await membership(env,groupId,actorId);
+ if(access.role!=='owner')throw new CollaborationError('只有组长可以删除小组任务',403);
+ const stillOwner='EXISTS (SELECT 1 FROM groups WHERE id=? AND owner_user_id=?)';
+ const pendingCandidate=kind==='candidates';
+ const match=pendingCandidate
+  ?"id=? AND group_id=? AND status='pending' AND updated=?"
+  :"id=? AND group_id=? AND COALESCE(source,'')<>'meeting' AND version=?";
+ const source=pendingCandidate?'task_candidates':'tasks';
+ const args=[id,groupId,(pendingCandidate?input.updated:input.version)??null,groupId,actorId];
+ const candidateId=pendingCandidate?'id':'candidate_id';
+ const matching=`SELECT ${candidateId} FROM ${source} WHERE ${match} AND ${stillOwner}`;
+ const statements=[
+  env.DB.prepare(`DELETE FROM task_applications WHERE candidate_id IN (${matching})`).bind(...args)
+ ];
+ if(!pendingCandidate)statements.push(
+  env.DB.prepare(`DELETE FROM task_candidates WHERE group_id=? AND id IN (${matching})`).bind(groupId,...args),
+  env.DB.prepare(`UPDATE jobs SET state='cancelled' WHERE task_id=? AND state IN ('pending','sending')
+    AND EXISTS (SELECT 1 FROM tasks WHERE ${match} AND ${stillOwner})`).bind(id,...args)
+ );
+ statements.push(env.DB.prepare(`DELETE FROM ${source} WHERE ${match} AND ${stillOwner}`).bind(...args));
+ const results=await env.DB.batch(statements);
+ if(!results.at(-1).meta.changes)throw new CollaborationError('任务已更新，请刷新',409);
+ return {ok:true};
+}
+
 export async function groupNotice(env,userId,groupId,title,body){
  const id=crypto.randomUUID(),now=Date.now();
  await env.DB.prepare('INSERT INTO group_notifications(id,user_id,group_id,title,body,created) VALUES(?,?,?,?,?,?)').bind(id,userId,groupId,title,body,now).run();
@@ -261,8 +297,7 @@ export async function projectAction(env,actorId,groupId,input){
   const id=crypto.randomUUID();await env.DB.prepare('INSERT INTO group_projects(id,group_id,title,notes,created) VALUES(?,?,?,?,?)').bind(id,groupId,requiredText(input.title,'总任务',200),String(input.notes||'').slice(0,5000),Date.now()).run();return {id};
  }
  if(!await env.DB.prepare('SELECT id FROM group_projects WHERE id=? AND group_id=?').bind(input.projectId,groupId).first())throw new CollaborationError('总任务不存在',404);
- const candidate=await createTaskCandidate(env,actorId,groupId,input);
- await env.DB.prepare('UPDATE task_candidates SET project_id=? WHERE id=?').bind(input.projectId,candidate.id).run();
+ const candidate=await createTaskCandidate(env,actorId,groupId,input,input.projectId);
  if(input.proposedAssigneeId)await reviewTaskCandidate(env,actorId,candidate.id,{decision:'confirm'});
  return candidate;
 }

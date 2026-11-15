@@ -11,7 +11,7 @@ import { getKV,setKV,startOAuth,finishOAuth,syncMail,preGenerateMailTranslations
 import { applyNameAliases,applyPreferredNameToFields } from './names.js';
 import { normalizeDigestRecord } from './digest-format.js';
 import { scheduleTask,repeatTasks,deliver,makeDigest,enqueue } from './jobs.js';
-import { projectAction,applyForTask,updateGroup,editGroupWork,listInvitations,respondInvitation,manageMember,addGroupMember,createGroup,createTaskCandidate,groupSnapshot,listGroups,respondToAssignment,reviewTaskCandidate } from './collaboration.js';
+import { projectAction,applyForTask,updateGroup,editGroupWork,deleteGroupTask,listInvitations,respondInvitation,manageMember,addGroupMember,createGroup,createTaskCandidate,groupSnapshot,listGroups,respondToAssignment,reviewTaskCandidate } from './collaboration.js';
 import { changeMeeting,confirmMeetingProposal,createMeetingPoll,meetingPollSnapshot,openMeetingVote,submitAvailability,voteMeetingProposal } from './meetings.js';
 const json=(data,status=200)=>Response.json(data,{status});
 async function body(request){if(Number(request.headers.get('content-length'))>7*1024*1024)throw new Error('请求过大');const text=await request.text();if(text.length>7*1024*1024)throw new Error('请求过大');return JSON.parse(text);}
@@ -161,6 +161,7 @@ async function routes(request,env,ctx){
 
   const groupWork=path.match(/^\/api\/groups\/([\w-]+)\/(projects|candidates|tasks)\/([\w-]+)$/);
   if(groupWork&&method==='PATCH')return json(await editGroupWork(env,account.user_id,groupWork[1],groupWork[2],groupWork[3],await body(request)));
+  if(groupWork&&groupWork[2]!=='projects'&&method==='DELETE')return json(await deleteGroupTask(env,account.user_id,groupWork[1],groupWork[2],groupWork[3],await body(request)));
   const projectGroup=path.match(/^\/api\/groups\/([\w-]+)\/projects$/)?.[1];
   if(projectGroup&&method==='POST')return json(await projectAction(env,account.user_id,projectGroup,await body(request)),201);
   const applyCandidate=path.match(/^\/api\/task-candidates\/([\w-]+)\/apply$/)?.[1];

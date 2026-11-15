@@ -542,4 +542,28 @@ test('group owners can edit published work without changing assignment state',as
  assert.equal(personal.due,newDue);
  assert.equal(personal.acceptance_status,'accepted');
  assert.equal(personal.user_id,'member');
+
+ const repeated={projectId,title:personal.title,notes:personal.notes,due:personal.due,proposedAssigneeId:'member'};
+ for(let i=0;i<3;i++)assert.equal((await call('owner',base+'/projects','POST',repeated)).status,409);
+ const otherTask=await call('owner',base+'/projects','POST',{...repeated,notes:'Different details'});
+ assert.equal(otherTask.status,201);
+ const otherCandidate=await otherTask.json();
+ const openTask={projectId,title:'Open for anyone'};
+ const open=await (await call('owner',base+'/projects','POST',openTask)).json();
+ assert.equal((await call('owner',base+'/projects','POST',openTask)).status,409);
+ assert.equal((await call('member',`task-candidates/${open.id}/apply`,'POST',{})).status,200);
+ assert.equal((await call('owner',base+'/candidates/'+open.id,'DELETE',{updated:open.updated})).status,200);
+
+ const version=current.version+1;
+ assert.equal((await call('member',path,'DELETE',{version})).status,403);
+ assert.equal((await call('outsider',path,'DELETE',{version})).status,404);
+ assert.equal((await call('owner',path,'DELETE',{version:current.version})).status,409);
+ assert.equal((await call('owner',path,'DELETE',{version})).status,200);
+ const remaining=await (await call('owner',base)).json();
+ assert.deepEqual(remaining.candidates.map(row=>row.id),[otherCandidate.id]);
+ assert.deepEqual(remaining.tasks.map(row=>row.candidate_id),[otherCandidate.id]);
+ assert.equal(remaining.applications.length,0);
+ assert.equal((await (await call('member','tasks')).json()).length,0);
+ assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE task_id=? AND state IN ('pending','sending')").bind(task.id).first()).n,0);
+ assert.equal((await call('owner',base+'/projects','POST',repeated)).status,201);
 });

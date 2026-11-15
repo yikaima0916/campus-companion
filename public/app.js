@@ -903,17 +903,45 @@ function openGroupWorkEditor({kind,record,projectId}){
   ${!project&&!record?`<label>${local('负责人','負責人','Assignee')}<select name="assignee">
    <option value="">${local('开放认领','開放認領','Open to claim')}</option>${memberOptions()}</select></label>`:''}
   <p class="error group-work-error" role="alert" data-user-content></p>
-  <div class="group-work-actions"><button type="button" data-cancel-work>${local('取消','取消','Cancel')}</button>
+  <div class="group-work-actions">${record&&!project?`<button type="button" class="danger-text" data-delete-group-task>${local('删除任务','刪除任務','Delete task')}</button>`:''}
+   <button type="button" data-cancel-work>${local('取消','取消','Cancel')}</button>
    <button type="submit" class="primary">${record?local('保存修改','儲存修改','Save changes'):project?heading:local('发布子任务','發佈子任務','Publish subtask')}</button></div>
  </form>`;
  const form=dialog.querySelector('form'),cancel=form.querySelector('[data-cancel-work]');
- const save=form.querySelector('[type=submit]'),errorLine=form.querySelector('.group-work-error');
+ const save=form.querySelector('[type=submit]'),remove=form.querySelector('[data-delete-group-task]'),errorLine=form.querySelector('.group-work-error');
+ const setBusy=busy=>{
+  save.disabled=cancel.disabled=busy;
+  if(remove)remove.disabled=busy;
+ };
+ const path=record?`groups/${groupId}/${kind}/${record.id}`:`groups/${groupId}/projects`;
  cancel.onclick=()=>dialog.close();
  dialog.addEventListener('close',()=>dialog.remove());
  dialog.addEventListener('cancel',event=>{if(save.disabled)event.preventDefault();});
+ if(remove)remove.onclick=async()=>{
+  if(save.disabled||!confirm(local(
+   `确定删除「${record.title}」？这项任务将从小组和负责人的清单中移除。`,
+   `確定刪除「${record.title}」？這項任務將從小組和負責人的清單中移除。`,
+   `Delete “${record.title}”? This will remove the task from the group and the assignee’s list.`
+  )))return;
+  setBusy(true);
+  errorLine.textContent='';
+  try{
+   const body=kind==='tasks'?{version:record.version}:{updated:record.updated};
+   await api(path,{method:'DELETE',body});
+  }catch(error){
+   errorLine.textContent=error.message;
+   setBusy(false);
+   return;
+  }
+  dialog.close();
+  toast(local('任务已删除','任務已刪除','Task deleted'));
+  await loadGroups(true);
+  await loadTasks();
+ };
  form.onsubmit=async event=>{
   event.preventDefault();
-  save.disabled=cancel.disabled=true;
+  if(save.disabled)return;
+  setBusy(true);
   errorLine.textContent='';
   const fields=form.elements;
   const due=fields.due?.value;
@@ -923,11 +951,10 @@ function openGroupWorkEditor({kind,record,projectId}){
   if(record&&kind==='candidates')body.updated=record.updated;
   if(!record&&projectId)Object.assign(body,{projectId,proposedAssigneeId:fields.assignee.value||null});
   try{
-   const path=record?`groups/${groupId}/${kind}/${record.id}`:`groups/${groupId}/projects`;
    await api(path,{method:record?'PATCH':'POST',body});
   }catch(error){
    errorLine.textContent=error.message;
-   save.disabled=cancel.disabled=false;
+   setBusy(false);
    return;
   }
   dialog.close();

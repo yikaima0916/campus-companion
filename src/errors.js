@@ -31,6 +31,8 @@ const MESSAGES={
   '提醒配置不正确':['提醒設定不正確','Invalid reminder configuration'],
   '邮件提醒时间不正确':['郵件提醒時間不正確','Invalid mail reminder time'],
   '只有组长可以编辑小组任务':['只有組長可以編輯小組任務','Only the group owner can edit group tasks'],
+  '只有组长可以删除小组任务':['只有組長可以刪除小組任務','Only the group owner can delete group tasks'],
+  '此项目已有相同的未完成子任务':['此專案已有相同的未完成子任務','This project already has an identical unfinished subtask'],
   '只有组长可以修改小组信息':['只有組長可以修改小組資訊','Only the group owner can edit group information'],
   '总任务不存在':['專案不存在','Project not found'],
   '任务名称需为 1–200 个字符':['任務名稱需為 1–200 個字元','Task name must be 1–200 characters'],
