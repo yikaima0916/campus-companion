@@ -1,0 +1,569 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync } from 'node:fs';
+import { webcrypto } from 'node:crypto';
+import worker from '../src/worker.js';
+import { hash,b64,random,seal,unseal,makePasswordHash } from '../src/security.js';
+import { deliver } from '../src/jobs.js';
+function database(){
+  const sqlite=new DatabaseSync(':memory:');for(const name of ['0001.sql','0002_accounts.sql','0003_profile.sql','0004_message_localizations.sql','0005_localization_version.sql','0006_outlook_connections.sql','0007_mail_preferences.sql','0008_account_scoped_records.sql','0009_collaboration.sql','0010_meeting_planner.sql','0011_meeting_votes_and_announcements.sql','0012_review_and_membership.sql','0013_preferred_zh_name.sql','0014_name_aliases.sql','0015_group_description.sql','0016_group_projects.sql'])sqlite.exec(readFileSync(new URL('../migrations/'+name,import.meta.url),'utf8'));
+  const db={prepare(sql){let args=[];const obj={bind(...a){args=a;return obj;},async first(){return sqlite.prepare(sql).get(...args)||null;},async all(){return {results:sqlite.prepare(sql).all(...args)};},async run(){const r=sqlite.prepare(sql).run(...args);return {meta:{changes:r.changes}};}};return obj;},async batch(stmts){sqlite.exec('BEGIN');try{const r=[];for(const s of stmts)r.push(await s.run());sqlite.exec('COMMIT');return r;}catch(e){sqlite.exec('ROLLBACK');throw e;}}};return db;
+}
+test('meeting workflow migration preserves historical confirmed state',()=>{
+  const sqlite=new DatabaseSync(':memory:'),names=['0001.sql','0002_accounts.sql','0003_profile.sql','0004_message_localizations.sql','0005_localization_version.sql','0006_outlook_connections.sql','0007_mail_preferences.sql','0008_account_scoped_records.sql','0009_collaboration.sql','0010_meeting_planner.sql'];
+  for(const name of names)sqlite.exec(readFileSync(new URL('../migrations/'+name,import.meta.url),'utf8'));
+  sqlite.prepare("INSERT INTO meeting_polls(id,group_id,creator_user_id,name,range_start,range_end,duration_minutes,status,confirmed_start,confirmed_end,created,updated) VALUES('old','group','owner','Old meeting',1,10,1,'confirmed',2,3,0,0)").run();
+  sqlite.exec(readFileSync(new URL('../migrations/0011_meeting_votes_and_announcements.sql',import.meta.url),'utf8'));
+  assert.equal(sqlite.prepare("SELECT phase FROM meeting_polls WHERE id='old'").get().phase,'confirmed');
+});
+test('authenticated CRUD persists and completing cancels pending reminders',async()=>{
+  const env={DB:database(),OWNER_EMAIL:'test@example.com'},origin='https://campus.example',token=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('u1','test@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'u1').run();
+  await env.DB.prepare("INSERT INTO subscriptions(id,data,created,user_id) VALUES('u1-endpoint','{}',0,'u1')").run();
+  const req=(path,method='GET',data)=>worker.fetch(new Request(origin+'/api/'+path,{method,headers:{Cookie:'campus_session='+token,Origin:origin,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined}),env);
+  assert.equal((await worker.fetch(new Request(origin+'/api/tasks'),env)).status,401);
+  const created=await req('tasks','POST',{title:'Test assignment',due:Date.now()+5*86400000});assert.equal(created.status,201);
+  const task=await created.json();assert.ok(task.id);
+  assert.equal((await (await req('tasks')).json()).length,1);
+  assert.ok((await env.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE state='pending'").first()).n>0);
+  const completed=await req('tasks/'+task.id,'PATCH',{version:1,completed:true});assert.equal(completed.status,200);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE state='pending'").first()).n,0);
+  assert.equal((await req('tasks/'+task.id,'PATCH',{version:1,completed:false})).status,409);
+  assert.equal((await req('tasks/'+task.id,'DELETE',{})).status,200);
+  assert.equal((await (await req('tasks')).json()).length,0);
+  assert.equal((await worker.fetch(new Request(origin+'/api/tasks',{method:'POST',headers:{Cookie:'campus_session='+token,Origin:'https://evil.example'},body:'{}'}),env)).status,403);
+});
+test('a queued reminder with obsolete task version never sends',async()=>{
+  const env={DB:database()};await env.DB.prepare("INSERT INTO jobs(id,task_id,version,at,channel,payload) VALUES('old','removed-task',1,0,'email','{}')").run();
+  await deliver(env);assert.equal((await env.DB.prepare("SELECT state FROM jobs WHERE id='old'").first()).state,'cancelled');
+});
+test('OAuth tokens encrypted at rest and tampering rejected',async()=>{
+  const key=random(),value={refresh_token:'private-test-token'};const cipher=await seal(value,key);
+  assert.ok(!cipher.includes('private-test-token'));assert.deepEqual(await unseal(cipher,key),value);
+  await assert.rejects(()=>unseal(cipher,random()));
+});
+test('password change invalidates other sessions and changes login credential',async()=>{
+  const old='initial-secret-2026',next='new-private-secret-2026';
+  const env={DB:database(),PASSWORD_HASH:await makePasswordHash(old),LOGIN_EMAIL:'owner@example.com'},origin='https://campus.example';
+  const login=async(password,email='owner@example.com')=>worker.fetch(new Request(origin+'/api/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json','CF-Connecting-IP':'127.0.0.1'},body:JSON.stringify({email,password})}),env);
+  assert.equal((await login(old,'wrong@example.com')).status,401);
+  const first=await login(old),second=await login(old);
+  assert.equal(first.status,200);assert.equal(second.status,200);
+  const cookie=first.headers.get('Set-Cookie').split(';')[0],other=second.headers.get('Set-Cookie').split(';')[0];
+  const changed=await worker.fetch(new Request(origin+'/api/password',{method:'POST',headers:{Origin:origin,Cookie:cookie,'Content-Type':'application/json'},body:JSON.stringify({current:old,next})}),env);
+  assert.equal(changed.status,200);assert.equal((await login(old)).status,401);assert.equal((await login(next)).status,200);
+  assert.equal((await worker.fetch(new Request(origin+'/api/tasks',{headers:{Cookie:other}}),env)).status,401);
+});
+test('forwarded email is reduced to structured metadata without storing its raw body',async()=>{
+  const env={DB:database(),MAIL_INGEST_MODE:'forwarding',SCHOOL_EMAIL:'student@university.example',LOGIN_EMAIL:'owner@example.com'};
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('owner','owner@example.com','unused',0)").run();
+  const raw=['Message-ID: <school-1@example.edu>','Subject: Scholarship payment notice','Content-Type: text/plain; charset=utf-8','','From: Finance Office <finance@example.edu>','To: student@university.example','','Scholarship payment is ready. Please confirm your bank details.'].join('\r\n');
+  const pending=[];
+  await worker.email({from:'forwarder@example.com',rawSize:raw.length,raw:new Blob([raw]).stream(),setReject(){throw new Error('unexpected reject');}},env,{waitUntil(p){pending.push(p);}});
+  await Promise.all(pending);
+  const saved=await env.DB.prepare('SELECT * FROM messages WHERE id=?').bind('<school-1@example.edu>').first();
+  assert.equal(saved.category,1);assert.match(saved.sender,/finance@example\.edu/);
+  assert.equal(JSON.stringify(saved).includes('Content-Type:'),false);
+});
+test('authenticated iPhone mail handoff stores a suggestion without creating a task',async()=>{
+  const env={DB:database(),SCHOOL_EMAIL:'student@university.example',SHORTCUT_INGEST_KEY:'test-shortcut-secret',LOGIN_EMAIL:'owner@example.com'};
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('owner','owner@example.com','unused',0)").run();
+  const origin='https://campus.example',payload={subject:'SOC 210 Assignment 2 deadline',sender:'student@university.example',content:'From: Teacher <teacher@ln.edu.hk>\nPlease submit Assignment 2 before the deadline.'};
+  const send=key=>worker.fetch(new Request(origin+'/api/mail/shortcut',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(payload)}),env);
+  assert.equal((await send('wrong-secret')).status,401);
+  const imported=await send('test-shortcut-secret');assert.equal(imported.status,201);
+  assert.deepEqual(await imported.json(),{ok:true,duplicate:false,category:2,suggestion:true,task:false});
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM messages').first()).n,1);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM tasks').first()).n,0);
+  const duplicate=await send('test-shortcut-secret');assert.equal((await duplicate.json()).duplicate,true);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM tasks').first()).n,0);
+});
+test('registration, account isolation, recovery, and scoped deletion work together',async()=>{
+  const env={DB:database(),OWNER_EMAIL:'owner@example.com'},origin='https://campus.example';
+  const call=(path,data,cookie)=>worker.fetch(new Request(origin+'/api/'+path,{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',...(cookie?{Cookie:cookie}:{})},body:JSON.stringify(data)}),env);
+  const register=async(email)=>call('register',{email,password:'private-password-2026',question:'我最喜欢的颜色是什么？',answer:'绿色'});
+  const first=await register('one@example.com'),second=await register('two@example.com');assert.equal(first.status,200);assert.equal(second.status,200);
+  const firstCookie=first.headers.get('Set-Cookie').split(';')[0],secondCookie=second.headers.get('Set-Cookie').split(';')[0];
+  const create=await call('tasks',{title:'only one can see this'},firstCookie);assert.equal(create.status,201);const task=await create.json();
+  assert.equal((await (await worker.fetch(new Request(origin+'/api/tasks',{headers:{Cookie:secondCookie}}),env)).json()).length,0);
+  assert.equal((await worker.fetch(new Request(origin+'/api/tasks/'+task.id,{method:'DELETE',headers:{Origin:origin,Cookie:secondCookie,'Content-Type':'application/json'},body:'{}'}),env)).status,404);
+  const firstUser=await env.DB.prepare('SELECT id FROM users WHERE email=?').bind('one@example.com').first();
+  await env.DB.prepare("INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES('m1','Private mail',0,'sender','origin',2,'summary','action','','test',?)").bind(firstUser.id).run();
+  await worker.fetch(new Request(origin+'/api/messages/m1',{method:'DELETE',headers:{Origin:origin,Cookie:secondCookie,'Content-Type':'application/json'},body:'{}'}),env);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM messages WHERE id='m1'").first()).n,1);
+  await worker.fetch(new Request(origin+'/api/messages/m1',{method:'DELETE',headers:{Origin:origin,Cookie:firstCookie,'Content-Type':'application/json'},body:'{}'}),env);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM messages WHERE id='m1'").first()).n,0);
+  const question=await call('recovery/question',{email:'one@example.com'});assert.equal((await question.json()).question,'我最喜欢的颜色是什么？');
+  assert.equal((await call('recovery/reset',{email:'one@example.com',answer:'wrong',password:'replacement-2026'})).status,401);
+  assert.equal((await call('recovery/reset',{email:'one@example.com',answer:'绿色',password:'replacement-2026'})).status,200);
+  assert.equal((await call('login',{email:'one@example.com',password:'replacement-2026'})).status,200);
+});
+
+test('provider identifiers and localization caches are unique within an account',async()=>{
+  const env={DB:database()},reminders='{"offsets":[],"exact":[],"repeat":0,"maxCount":0,"start":"08:00","end":"23:00","days":[0],"push":false,"email":false}';
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('one','one@example.com','unused',0),('two','two@example.com','unused',0)").run();
+  await env.DB.prepare("INSERT INTO tasks(id,title,source,source_id,reminders,created,updated,user_id) VALUES('t1','First','email','provider-1',?,0,0,'one'),('t2','Second','email','provider-1',?,0,0,'two')").bind(reminders,reminders).run();
+  await env.DB.prepare("INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES('provider-1','First',0,'sender','origin',2,'summary','action','','test','one'),('provider-1','Second',0,'sender','origin',2,'summary','action','','test','two')").run();
+  const localization="INSERT INTO message_localizations(message_id,user_id,locale,subject,sender,origin,summary,action,quality,updated) VALUES('provider-1',?,'en',?,'sender','origin','summary','action','test',0)";
+  await env.DB.prepare(localization).bind('one','First').run();
+  await env.DB.prepare(localization).bind('two','Second').run();
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM tasks WHERE source_id='provider-1'").first()).n,2);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM messages WHERE id='provider-1'").first()).n,2);
+  assert.equal((await env.DB.prepare("SELECT subject FROM message_localizations WHERE user_id='one' AND message_id='provider-1'").first()).subject,'First');
+  assert.equal((await env.DB.prepare("SELECT subject FROM message_localizations WHERE user_id='two' AND message_id='provider-1'").first()).subject,'Second');
+});
+
+test('a reassigned push endpoint cannot receive an older account job',async()=>{
+  const env={DB:database()};
+  await env.DB.prepare("INSERT INTO subscriptions(id,data,created,user_id) VALUES('endpoint','{}',0,'new-owner')").run();
+  await env.DB.prepare("INSERT INTO jobs(id,at,channel,payload,state,user_id) VALUES('private-job',0,'push:endpoint','{}','pending','old-owner')").run();
+  await deliver(env,1);
+  assert.equal((await env.DB.prepare("SELECT state FROM jobs WHERE id='private-job'").first()).state,'cancelled');
+  assert.equal((await env.DB.prepare("SELECT user_id FROM subscriptions WHERE id='endpoint'").first()).user_id,'new-owner');
+});
+
+test('group candidate review and assignee acceptance are separate transitions',async()=>{
+  const env={DB:database()},origin='https://campus.example',ownerToken=random(),memberToken=random(),outsiderToken=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('owner','owner@example.com','unused',0),('member','member@example.com','unused',0),('outsider','outsider@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?),(?,?,?),(?,?,?)').bind(await hash(ownerToken),Date.now()+3600000,'owner',await hash(memberToken),Date.now()+3600000,'member',await hash(outsiderToken),Date.now()+3600000,'outsider').run();
+  const call=(token,path,method='GET',data)=>worker.fetch(new Request(origin+'/api/'+path,{method,headers:{Cookie:'campus_session='+token,Origin:origin,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined}),env);
+  const groupResponse=await call(ownerToken,'groups','POST',{name:'CDS2003 Group Project'});assert.equal(groupResponse.status,201);
+  const group=await groupResponse.json();
+  assert.equal((await call(ownerToken,`groups/${group.id}/members`,'POST',{email:'member@example.com'})).status,201);
+  assert.equal((await call(memberToken,`groups/${group.id}`)).status,404);
+  const invites=await (await call(memberToken,'invitations')).json();
+  assert.equal(invites.length,1);assert.equal(invites[0].members.length,1);assert.equal(invites[0].members[0].user_id,'owner');assert.ok('description' in invites[0]);assert.ok('avatar' in invites[0].members[0]);
+  assert.equal((await call(outsiderToken,`invitations/${invites[0].id}`,'POST',{decision:'accept'})).status,404);
+  assert.equal((await call(memberToken,`invitations/${invites[0].id}`,'POST',{decision:'accept'})).status,200);
+  assert.equal((await call(memberToken,`invitations/${invites[0].id}`,'POST',{decision:'accept'})).status,404);
+  assert.equal((await call(outsiderToken,`groups/${group.id}`)).status,404);
+  const candidateResponse=await call(ownerToken,`groups/${group.id}/candidates`,'POST',{title:'Analyse meeting algorithm',proposedAssigneeId:'member',due:Date.now()+5*86400000,evidence:{title:'Member will analyse the meeting algorithm.'}});assert.equal(candidateResponse.status,201);
+  const candidate=await candidateResponse.json();
+  const pendingForMember=await (await call(memberToken,`groups/${group.id}`)).json();assert.equal(pendingForMember.candidates[0].next_action,'owner_review');assert.equal(pendingForMember.candidates[0].next_actor_user_id,'owner');
+  await env.DB.prepare("INSERT INTO subscriptions(id,data,created,user_id) VALUES('member-endpoint','{}',0,'member')").run();
+  assert.equal((await call(outsiderToken,`task-candidates/${candidate.id}/review`,'POST',{decision:'confirm'})).status,404);
+  const revisedDue=Date.now()+6*86400000;
+  const confirmedResponse=await call(ownerToken,`task-candidates/${candidate.id}/review`,'POST',{decision:'confirm',changes:{title:'Verify meeting algorithm',notes:'Use boundary cases.',due:revisedDue,evidence:{title:'Reviewer clarified the deliverable.'}}});assert.equal(confirmedResponse.status,200);
+  const task=await confirmedResponse.json();assert.equal(task.acceptance_status,'pending');assert.equal(task.user_id,'member');assert.equal(task.title,'Verify meeting algorithm');assert.equal(task.due,revisedDue);
+  const reviewedCandidate=await env.DB.prepare('SELECT * FROM task_candidates WHERE id=?').bind(candidate.id).first();assert.equal(JSON.parse(reviewedCandidate.evidence).title,'Reviewer clarified the deliverable.');
+  assert.equal((await (await call(memberToken,'tasks')).json()).length,0);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM jobs WHERE task_id=?').bind(task.id).first()).n,0);
+  assert.equal((await call(memberToken,`tasks/${task.id}`,'PATCH',{version:1,completed:true})).status,409);
+  assert.equal((await call(ownerToken,`tasks/${task.id}/assignment`,'POST',{decision:'accept'})).status,404);
+  const accepted=await call(memberToken,`tasks/${task.id}/assignment`,'POST',{decision:'accept'});assert.equal(accepted.status,200);assert.equal((await accepted.json()).acceptance_status,'accepted');
+  assert.equal((await (await call(memberToken,'tasks')).json()).length,1);
+  assert.ok((await env.DB.prepare('SELECT COUNT(*) n FROM jobs WHERE task_id=?').bind(task.id).first()).n>0);
+  assert.equal((await call(ownerToken,`task-candidates/${candidate.id}/review`,'POST',{decision:'confirm'})).status,409);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM tasks WHERE candidate_id=?').bind(candidate.id).first()).n,1);
+  const snapshot=await (await call(memberToken,`groups/${group.id}`)).json();assert.equal(snapshot.members.length,2);assert.equal(snapshot.tasks[0].acceptance_status,'accepted');
+
+  const selfCandidate=await (await call(ownerToken,`groups/${group.id}/candidates`,'POST',{title:'Prepare opening slides',proposedAssigneeId:'owner',evidence:{title:'Owner volunteered.'}})).json();
+  const selfTask=await (await call(ownerToken,`task-candidates/${selfCandidate.id}/review`,'POST',{decision:'confirm'})).json();
+  assert.equal(selfTask.acceptance_status,'pending');
+  const selfAccepted=await call(ownerToken,`tasks/${selfTask.id}/assignment`,'POST',{decision:'accept'});assert.equal(selfAccepted.status,200);assert.equal((await selfAccepted.json()).acceptance_status,'accepted');
+});
+
+test('failed task creation rolls back every candidate review change',async()=>{
+  const env={DB:database()},origin='https://campus.example',ownerToken=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('owner','owner@example.com','unused',0)").run();
+  await env.DB.prepare("INSERT INTO groups(id,name,owner_user_id,created,updated) VALUES('group','Project','owner',0,0)").run();
+  await env.DB.prepare("INSERT INTO group_members(group_id,user_id,role,joined) VALUES('group','owner','owner',0)").run();
+  await env.DB.prepare("INSERT INTO task_candidates(id,group_id,creator_user_id,proposed_assignee_id,title,notes,due,evidence,status,created,updated) VALUES('candidate','group','owner','owner','Original','',NULL,'{}','pending',0,0)").run();
+  const reminders='{"offsets":[],"exact":[],"repeat":0,"maxCount":0,"start":"08:00","end":"23:00","days":[0],"push":false,"email":false}';
+  await env.DB.prepare("INSERT INTO tasks(id,title,source,source_id,reminders,created,updated,user_id,group_id,acceptance_status,candidate_id) VALUES('existing','Existing','candidate','candidate',?,0,0,'owner','group','pending','candidate')").bind(reminders).run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(ownerToken),Date.now()+3600000,'owner').run();
+  const response=await worker.fetch(new Request(origin+'/api/task-candidates/candidate/review',{method:'POST',headers:{Cookie:'campus_session='+ownerToken,Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({decision:'confirm',changes:{title:'Must roll back',evidence:{title:'Must also roll back'}}})}),env);
+  assert.equal(response.status,409);
+  const candidate=await env.DB.prepare("SELECT title,evidence,status FROM task_candidates WHERE id='candidate'").first();
+  assert.equal(candidate.title,'Original');assert.equal(candidate.status,'pending');assert.deepEqual(JSON.parse(candidate.evidence),{});
+});
+
+test('meeting polls treat missing availability as unknown and confirm only full-group proposals',async()=>{
+  const env={DB:database()},origin='https://campus.example',ownerToken=random(),memberToken=random(),member2Token=random(),lateToken=random(),outsiderToken=random(),start=Date.now()+5*86400000,end=Date.now()+5*86400000+4*3600000;
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('owner','owner@example.com','unused',0),('member','member@example.com','unused',0),('member2','member2@example.com','unused',0),('late','late@example.com','unused',0),('outsider','outsider@example.com','unused',0)").run();
+  await env.DB.prepare("INSERT INTO groups(id,name,owner_user_id,created,updated) VALUES('group','Project','owner',0,0)").run();
+  await env.DB.prepare("INSERT INTO group_members(group_id,user_id,role,joined) VALUES('group','owner','owner',0),('group','member','member',1),('group','member2','member',2)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?),(?,?,?),(?,?,?),(?,?,?),(?,?,?)').bind(await hash(ownerToken),Date.now()+3600000,'owner',await hash(memberToken),Date.now()+3600000,'member',await hash(member2Token),Date.now()+3600000,'member2',await hash(lateToken),Date.now()+3600000,'late',await hash(outsiderToken),Date.now()+3600000,'outsider').run();
+  const call=(token,path,method='GET',data)=>worker.fetch(new Request(origin+'/api/'+path,{method,headers:{Cookie:'campus_session='+token,Origin:origin,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined}),env);
+  const created=await call(ownerToken,'groups/group/meeting-polls','POST',{name:'Progress meeting',rangeStart:start,rangeEnd:end,durationMinutes:60,slotMinutes:30,bufferMinutes:0});assert.equal(created.status,201);const poll=await created.json();
+  assert.equal((await call(outsiderToken,`meeting-polls/${poll.id}`)).status,404);
+  assert.equal((await call(outsiderToken,`meeting-polls/${poll.id}/vote`,'POST',{start})).status,404);
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/vote`,'POST',{start})).status,409);
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/availability`,'PUT',{intervals:[[start,end]]})).status,200);
+  const incomplete=await (await call(ownerToken,`meeting-polls/${poll.id}`)).json();assert.deepEqual(incomplete.result.missingMemberIds,['member','member2']);assert.equal(incomplete.result.hasAllMemberOption,false);assert.deepEqual(incomplete.memberStatuses,[{userId:'owner',submitted:true},{userId:'member',submitted:false},{userId:'member2',submitted:false}]);
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/voting`,'POST',{})).status,409);
+  assert.equal((await call(memberToken,`meeting-polls/${poll.id}/availability`,'PUT',{intervals:[[start+60*60000,end]],avoidIntervals:[[start+60*60000,start+90*60000]]})).status,200);
+  assert.equal((await call(member2Token,`meeting-polls/${poll.id}/availability`,'PUT',{intervals:[[start+60*60000,end]]})).status,200);
+  const complete=await (await call(ownerToken,`meeting-polls/${poll.id}`)).json(),options=complete.result.proposals.filter(item=>item.allAvailable);assert.ok(options.length>=2);const [proposal,secondProposal]=options;
+  const voting=await call(ownerToken,`meeting-polls/${poll.id}/voting`,'POST',{});assert.equal(voting.status,200);assert.equal((await voting.json()).phase,'voting');
+  await env.DB.prepare("INSERT INTO group_members(group_id,user_id,role,joined) VALUES('group','late','member',3)").run();
+  assert.equal((await call(lateToken,`meeting-polls/${poll.id}/vote`,'POST',{start:proposal.start})).status,403);
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/vote`,'POST',{start:proposal.start})).status,200);
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/confirm`,'POST',{start:proposal.start})).status,409);
+  assert.equal((await call(memberToken,`meeting-polls/${poll.id}/vote`,'POST',{start:proposal.start})).status,200);
+  assert.equal((await call(member2Token,`meeting-polls/${poll.id}/vote`,'POST',{start:secondProposal.start})).status,200);
+  const voted=await (await call(memberToken,`meeting-polls/${poll.id}`)).json();assert.equal(voted.votes.find(item=>item.start===proposal.start).count,2);assert.deepEqual(voted.missingVoterIds,[]);assert.equal(voted.memberStatuses.length,3);
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/confirm`,'POST',{start:secondProposal.start})).status,409);
+  assert.equal((await call(memberToken,`meeting-polls/${poll.id}/confirm`,'POST',{start:proposal.start})).status,403);
+  await env.DB.prepare("INSERT INTO subscriptions(id,data,created,user_id) VALUES('owner-push','{}',0,'owner'),('member-push','{}',0,'member'),('member2-push','{}',0,'member2')").run();
+  const confirmed=await call(ownerToken,`meeting-polls/${poll.id}/confirm`,'POST',{start:proposal.start});assert.equal(confirmed.status,200);assert.equal((await confirmed.json()).status,'confirmed');
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/confirm`,'POST',{start:proposal.start})).status,409);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM tasks WHERE source='meeting' AND source_id=?").bind(poll.id).first()).n,3);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM group_announcements WHERE group_id=?').bind('group').first()).n,1);
+  assert.ok((await env.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE task_id IN (SELECT id FROM tasks WHERE source='meeting' AND source_id=?)").bind(poll.id).first()).n>0);
+  assert.equal((await (await call(ownerToken,'tasks')).json()).some(task=>task.source==='meeting'),true);
+  assert.equal((await (await call(memberToken,'tasks')).json()).some(task=>task.source==='meeting'),true);
+  assert.equal((await (await call(lateToken,'tasks')).json()).some(task=>task.source==='meeting'),false);
+  const before=await (await call(ownerToken,`meeting-polls/${poll.id}`)).json();
+  assert.equal((await call(memberToken,`meeting-polls/${poll.id}/lifecycle`,'POST',{action:'cancel',revision:before.poll.revision})).status,403);
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/lifecycle`,'POST',{action:'cancel',revision:before.poll.revision})).status,200);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM tasks WHERE source='meeting'").first()).n,0);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE state='pending'").first()).n,0);
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/lifecycle`,'POST',{action:'reopen',revision:before.poll.revision,rangeStart:start,rangeEnd:end})).status,409);
+  const closed=await (await call(ownerToken,`meeting-polls/${poll.id}`)).json();assert.equal(closed.poll.status,'closed');
+  assert.equal((await call(ownerToken,`meeting-polls/${poll.id}/lifecycle`,'POST',{action:'reopen',revision:closed.poll.revision,rangeStart:start+86400000,rangeEnd:end+86400000})).status,200);
+  const reopened=await (await call(ownerToken,`meeting-polls/${poll.id}`)).json();assert.equal(reopened.poll.phase,'collecting');assert.equal(reopened.submissions.length,0);assert.equal(reopened.ownVote,null);
+
+});
+
+test('unauthenticated shared view URLs redirect to the public home page',async()=>{
+  const env={DB:database(),ASSETS:{fetch:async()=>new Response('public app')}};
+  const response=await worker.fetch(new Request('https://campus.example/?view=settings',{redirect:'manual'}),env);
+  assert.equal(response.status,302);assert.equal(response.headers.get('location'),'https://campus.example/');
+  const publicResponse=await worker.fetch(new Request('https://campus.example/'),env);
+  assert.equal(publicResponse.status,200);
+});
+
+test('each signed-in account can start its own Outlook connection with an email hint',async()=>{
+  const env={DB:database(),MS_CLIENT_ID:'test-client',MS_CLIENT_SECRET:'test-secret',APP_ORIGIN:'https://campus.example',TOKEN_KEY:random()},origin='https://campus.example',token=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('second','second@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'second').run();
+  const status=await (await worker.fetch(new Request(origin+'/api/status',{headers:{Cookie:'campus_session='+token}}),env)).json();assert.equal(status.outlookConfigured,true);assert.deepEqual(status.outlookMissingConfig,[]);
+  const response=await worker.fetch(new Request(origin+'/api/outlook/start?email=personal@outlook.com',{headers:{Cookie:'campus_session='+token},redirect:'manual'}),env);
+  assert.equal(response.status,302);
+  const authorization=new URL(response.headers.get('location'));
+  assert.equal(authorization.hostname,'login.microsoftonline.com');
+  assert.equal(authorization.searchParams.get('login_hint'),'personal@outlook.com');
+  assert.equal(authorization.searchParams.get('prompt'),'select_account');
+  assert.match(authorization.searchParams.get('scope'),/\bMail\.Read\b/);
+  assert.doesNotMatch(authorization.searchParams.get('scope'),/\bMail\.Send\b/);
+  const state=authorization.searchParams.get('state');
+  assert.equal((await env.DB.prepare('SELECT user_id FROM oauth WHERE state=?').bind(state).first()).user_id,'second');
+});
+
+test('Outlook diagnostics reject example placeholders before OAuth starts',async()=>{
+  const env={DB:database(),MS_CLIENT_ID:'REPLACE_WITH_YOUR_MICROSOFT_APP_CLIENT_ID',MS_CLIENT_SECRET:'replace-with-secret-value',APP_ORIGIN:'https://your-worker.your-subdomain.workers.dev',TOKEN_KEY:'generated_by_setup_secrets'},origin='https://campus.example',token=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('user','user@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'user').run();
+  const request=path=>worker.fetch(new Request(origin+'/api/'+path,{headers:{Cookie:'campus_session='+token},redirect:'manual'}),env);
+  const status=await (await request('status')).json();assert.equal(status.outlookConfigured,false);assert.deepEqual(status.outlookMissingConfig.sort(),['APP_ORIGIN','MS_CLIENT_ID','MS_CLIENT_SECRET','TOKEN_KEY']);
+  assert.equal((await request('outlook/start?email=personal@outlook.com')).status,400);
+});
+
+test('disconnecting Outlook removes only the current account authorization',async()=>{
+  const env={DB:database()},origin='https://campus.example',token=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('one','one@example.com','unused',0),('two','two@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'one').run();
+  await env.DB.prepare("INSERT INTO outlook_connections(user_id,token,email,status) VALUES('one','encrypted-a','one@outlook.com','同步完成'),('two','encrypted-b','two@outlook.com','同步完成')").run();
+  await env.DB.prepare("INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES('keep','School mail',0,'sender','school',2,'summary','action','','test','one')").run();
+  const response=await worker.fetch(new Request(origin+'/api/outlook',{method:'DELETE',headers:{Origin:origin,Cookie:'campus_session='+token,'Content-Type':'application/json'}}),env);
+  assert.equal(response.status,200);
+  assert.equal(await env.DB.prepare("SELECT user_id FROM outlook_connections WHERE user_id='one'").first(),null);
+  assert.equal((await env.DB.prepare("SELECT email FROM outlook_connections WHERE user_id='two'").first()).email,'two@outlook.com');
+  assert.equal((await env.DB.prepare("SELECT id FROM messages WHERE id='keep' AND user_id='one'").first()).id,'keep');
+});
+
+test('mail reminder preferences are saved separately for each account',async()=>{
+  const env={DB:database()},origin='https://campus.example',token=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('prefs','prefs@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'prefs').run();
+  const preferences={focusTerms:['scholarship','SOC 210'],daily:{enabled:true,time:'18:30'},late:{enabled:false,time:'00:30'},translateZh:true,englishSummary:false};
+  const response=await worker.fetch(new Request(origin+'/api/profile',{method:'PATCH',headers:{Origin:origin,Cookie:'campus_session='+token,'Content-Type':'application/json'},body:JSON.stringify({mailPreferences:preferences})}),env);
+  assert.equal(response.status,200);assert.deepEqual((await response.json()).mailPreferences,preferences);
+  const profile=await worker.fetch(new Request(origin+'/api/profile',{headers:{Cookie:'campus_session='+token}}),env);
+  assert.deepEqual((await profile.json()).mailPreferences,preferences);
+});
+
+
+test('custom reminder presets are cleaned and saved with the reminder defaults',async()=>{
+  const env={DB:database()},origin='https://campus.example',token=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('presets','presets@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'presets').run();
+  const patch=data=>worker.fetch(new Request(origin+'/api/profile',{method:'PATCH',headers:{Origin:origin,Cookie:'campus_session='+token,'Content-Type':'application/json'},body:JSON.stringify(data)}),env);
+  const saved=await patch({reminders:{presets:[90,90,1440,'x',360]}});
+  assert.equal(saved.status,200);
+  assert.deepEqual((await saved.json()).reminders.presets,[360,90]);
+  // saving only offsets keeps the presets that were saved before
+  assert.equal((await patch({reminders:{offsets:[1440,90]}})).status,200);
+  const profile=await (await worker.fetch(new Request(origin+'/api/profile',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.deepEqual(profile.reminders.presets,[360,90]);
+  assert.deepEqual(profile.reminders.offsets,[1440,90]);
+  // offsets that a task would reject are refused here too
+  assert.equal((await patch({reminders:{offsets:[1.5]}})).status,400);
+});
+
+test('digest history is visible only to the account that received it',async()=>{
+  const env={DB:database()},origin='https://campus.example',firstToken=random(),secondToken=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('first','first@example.com','unused',0),('second','second@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?),(?,?,?)').bind(await hash(firstToken),Date.now()+3600000,'first',await hash(secondToken),Date.now()+3600000,'second').run();
+  await env.DB.prepare("INSERT INTO kv(key,value) VALUES('digest:first:daily:2026-09-24:18:30',?),('digest:first:late:2026-09-23:00:00',?),('digest:second:daily:2026-09-24:18:30',?)").bind(JSON.stringify({title:'Daily digest',body:'private one',created:3}),JSON.stringify({title:'Older evening digest',body:'private evening',created:2}),JSON.stringify({title:'Second digest',body:'private two',created:2})).run();
+  const get=token=>worker.fetch(new Request(origin+'/api/digests',{headers:{Cookie:'campus_session='+token}}),env);
+  const first=await (await get(firstToken)).json(),second=await (await get(secondToken)).json();
+  assert.equal(first.length,2);assert.equal(first[0].title,'Daily digest');assert.equal(first[1].title,'Older evening digest');
+  assert.equal(second.length,1);assert.equal(second[0].title,'Second digest');
+});
+
+test('digest emails can be ignored and restored without crossing accounts',async()=>{
+  const env={DB:database()},origin='https://campus.example',firstToken=random(),secondToken=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('first','first@example.com','unused',0),('second','second@example.com','unused',0)").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?),(?,?,?)').bind(await hash(firstToken),Date.now()+3600000,'first',await hash(secondToken),Date.now()+3600000,'second').run();
+  await env.DB.prepare("INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES('mail-1','Seminar',0,'sender','origin',3,'summary','action','','test','first')").run();
+  await env.DB.prepare("INSERT INTO kv(key,value) VALUES('digest:first:daily:2026-10-22',?)").bind(JSON.stringify({created:1,title:'Daily',items:[{id:'mail-1',subject:'Seminar',summary:'summary',category:3,received:0}]})).run();
+  const call=(token,method='GET',data)=>worker.fetch(new Request(origin+'/api/'+(method==='GET'?'digests':'digests/ignore'),{method,headers:{Cookie:'campus_session='+token,Origin:origin,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined}),env);
+  let records=await (await call(firstToken)).json();
+  assert.equal(records[0].items[0].ignored,false);
+  assert.equal((await call(secondToken,'POST',{messageId:'mail-1'})).status,404);
+  assert.equal((await call(firstToken,'POST',{messageId:'mail-1'})).status,200);
+  records=await (await call(firstToken)).json();
+  assert.equal(records[0].items[0].ignored,true);
+  assert.equal((await env.DB.prepare("SELECT value FROM kv WHERE key='digest_ignore:first:mail-1'").first()).value,'1');
+  assert.equal((await call(firstToken,'DELETE',{messageId:'mail-1'})).status,200);
+  records=await (await call(firstToken)).json();
+  assert.equal(records[0].items[0].ignored,false);
+  assert.equal(await env.DB.prepare("SELECT value FROM kv WHERE key='digest_ignore:first:mail-1'").first(),null);
+});
+
+test('mail suggestions are private, deduplicated and require explicit confirmation',async()=>{
+ const {saveMailSuggestion,listMailSuggestions,reviewMailSuggestion}=await import('../src/suggestions.js');
+ const env={DB:database()},a={assignment:true,title:'Assignment',action:'Submit report',due:Date.now()+86400000,evidence:{deadline:'tomorrow'}};
+ await saveMailSuggestion(env,'one','message',a);await saveMailSuggestion(env,'one','message',a);
+ await env.DB.prepare("INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES('message','Exchange plan source',0,'sender','origin',2,'summary','action','','test','one')").run();
+ assert.equal((await listMailSuggestions(env,'two')).length,0);
+ assert.equal((await env.DB.prepare('SELECT count(*) n FROM tasks').first()).n,0);
+ const rows=await listMailSuggestions(env,'one');assert.equal(rows.length,1);assert.equal(rows[0].message_subject,'Exchange plan source');
+ await assert.rejects(()=>reviewMailSuggestion(env,'two',rows[0].id,{decision:'confirm'}));
+ await reviewMailSuggestion(env,'one',rows[0].id,{decision:'confirm',title:'Reviewed title',due:null});
+ const task=await env.DB.prepare('SELECT * FROM tasks').first();assert.equal(task.title,'Reviewed title');assert.equal(task.due,null);assert.equal(task.user_id,'one');
+ await assert.rejects(()=>reviewMailSuggestion(env,'one',rows[0].id,{decision:'confirm'}));
+ assert.equal((await env.DB.prepare('SELECT count(*) n FROM tasks').first()).n,1);
+});
+
+test('group ownership transfer and leaving enforce ownership and assignment rules',async()=>{
+ const {manageMember}=await import('../src/collaboration.js');const env={DB:database()};
+ await env.DB.prepare("INSERT INTO groups(id,name,owner_user_id,created,updated) VALUES('g','Team','a',0,0)").run();
+ await env.DB.prepare("INSERT INTO group_members(group_id,user_id,role,joined) VALUES('g','a','owner',0),('g','b','member',0)").run();
+ await assert.rejects(()=>manageMember(env,'a','g',{action:'remove',userId:'a'}));
+ await assert.rejects(()=>manageMember(env,'b','g',{action:'transfer',userId:'a'}));
+ await manageMember(env,'a','g',{action:'transfer',userId:'b'});
+ assert.equal((await env.DB.prepare("SELECT owner_user_id FROM groups WHERE id='g'").first()).owner_user_id,'b');
+ await manageMember(env,'a','g',{action:'remove',userId:'a'});
+ assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM group_members WHERE group_id='g'").first()).n,1);
+});
+
+test('preferred Chinese name is stored and messages list is paginated without blocking',async()=>{
+  const env={DB:database()},origin='https://campus.example',token=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created,locale) VALUES('echo','echo@example.com','unused',0,'zh-CN')").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'echo').run();
+  const patch=await worker.fetch(new Request(origin+'/api/profile',{method:'PATCH',headers:{Origin:origin,Cookie:'campus_session='+token,'Content-Type':'application/json'},body:JSON.stringify({preferredZhName:'马艺恺',mailPreferences:{translateZh:true,englishSummary:false,daily:{enabled:true,time:'20:00'},late:{enabled:true,time:'00:00'},focusTerms:[]}})}),env);
+  assert.equal(patch.status,200);
+  assert.equal((await patch.json()).preferredZhName,'马艺恺');
+  const now=Date.now();
+  for(let i=0;i<3;i++)await env.DB.prepare('INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind('m'+i,'Subject '+i,now-i, 's','o',2,'用户马毅凯请留意','无需操作','','test','echo').run();
+  const list=await (await worker.fetch(new Request(origin+'/api/messages?limit=2',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.equal(list.messages.length,2);
+  assert.ok(list.nextBefore);
+  assert.match(list.messages[0].summary,/马艺恺/);
+  assert.doesNotMatch(list.messages[0].summary,/马毅凯/);
+  const detail=await (await worker.fetch(new Request(origin+'/api/messages/m0',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.equal(detail.id,'m0');
+  assert.ok(detail.chinese||detail.display);
+  assert.ok(detail.english);
+});
+
+test('user-defined name aliases persist, rewrite senders, and mail search filters by query',async()=>{
+  const env={DB:database()},origin='https://campus.example',token=random();
+  await env.DB.prepare("INSERT INTO users(id,email,password_hash,created,locale) VALUES('a2','alias@example.com','unused',0,'zh-CN')").run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'a2').run();
+  const auth={Origin:origin,Cookie:'campus_session='+token,'Content-Type':'application/json'};
+  const patch=await worker.fetch(new Request(origin+'/api/profile',{method:'PATCH',headers:auth,body:JSON.stringify({nameAliases:[{alias:'MA Yikai',zhName:'马艺恺'},{alias:'YIKAI MA',zhName:'馬藝愷'}]})}),env);
+  assert.equal(patch.status,200);
+  const profile=await (await worker.fetch(new Request(origin+'/api/profile',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.equal(profile.nameAliases.length,2);
+  assert.ok(profile.nameAliases.some(a=>a.alias==='MA Yikai'&&a.zhName==='马艺恺'));
+  await env.DB.prepare('INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind('ma1','Assignment 2 deadline','100','Yikai Ma <yikaima@ln.edu.hk>','o',2,'请在截止前提交','无','','t','a2').run();
+  await env.DB.prepare('INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind('ma2','Party invite','200','MA Yikai <mayikai@ln.edu.hk>','o',3,'周六活动','无','','t','a2').run();
+  await env.DB.prepare('INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind('ma3','Course news','300','Zhang Wei <zw@ln.edu.hk>','o',4,'无关邮件','无','','t','a2').run();
+  const all=await (await worker.fetch(new Request(origin+'/api/messages',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  const byId=new Map(all.messages.map(m=>[m.id,m]));
+  assert.match(byId.get('ma1').sender,/马艺恺/);
+  assert.doesNotMatch(byId.get('ma1').sender,/Yikai Ma/);
+  assert.match(byId.get('ma2').sender,/马艺恺/);
+  assert.doesNotMatch(byId.get('ma2').sender,/MA Yikai/);
+  assert.match(byId.get('ma3').sender,/Zhang Wei/);
+  const bySubject=await (await worker.fetch(new Request(origin+'/api/messages?q=deadline',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.equal(bySubject.messages.length,1);
+  assert.equal(bySubject.messages[0].id,'ma1');
+  const bySender=await (await worker.fetch(new Request(origin+'/api/messages?q=zw@ln.edu.hk',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.equal(bySender.messages.length,1);
+  assert.equal(bySender.messages[0].id,'ma3');
+  const none=await (await worker.fetch(new Request(origin+'/api/messages?q='+encodeURIComponent('不存在的关键词'),{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.equal(none.messages.length,0);
+  assert.equal(none.nextBefore,null);
+  const sug=await (await worker.fetch(new Request(origin+'/api/name-alias-suggestions',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.ok(Array.isArray(sug.suggestions));
+  assert.ok(sug.suggestions.some(s=>/yikai ma/i.test(s.variant)&&s.zhName==='马艺恺'));
+  // invalid alias shape is rejected without touching saved rows
+  const bad=await worker.fetch(new Request(origin+'/api/profile',{method:'PATCH',headers:auth,body:JSON.stringify({nameAliases:[{alias:'',zhName:'马艺恺'}]})}),env);
+  assert.equal(bad.status,400);
+  const kept=await (await worker.fetch(new Request(origin+'/api/profile',{headers:{Cookie:'campus_session='+token}}),env)).json();
+  assert.equal(kept.nameAliases.length,2);
+});
+
+test('brief generation is account scoped and unavailable AI is reported without fabricating a summary',async()=>{
+ const env={DB:database()},origin='https://campus.example',token=random();
+ await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('brief-a','a@example.com','unused',0),('brief-b','b@example.com','unused',0)").run();
+ await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'brief-a').run();
+ await env.DB.prepare("INSERT INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES('own','FW: One',1,'s','o',2,'s','a','','q','brief-a'),('other','FW: Two',1,'s','o',2,'s','a','','q','brief-b')").run();
+ const response=await worker.fetch(new Request(origin+'/api/mail/briefs',{method:'POST',headers:{Cookie:'campus_session='+token,Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({ids:['own','other']})}),env);
+ assert.equal(response.status,200);assert.deepEqual((await response.json()).results,[{id:'own',error:true}]);
+});
+
+test('two tabs keep separate accounts with a shared login cookie and exchange invitations',async()=>{
+ const env={DB:database()},origin='https://campus.example',ta=random(),tb=random(),tabA=crypto.randomUUID(),tabB=crypto.randomUUID();
+ for(const [id,email,token] of [['a','a@example.com',ta],['b','b@example.com',tb]]){await env.DB.prepare('INSERT INTO users(id,email,password_hash,created) VALUES(?,?,?,0)').bind(id,email,'unused').run();await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,id).run();}
+ const cookies=`campus_session=${tb}; campus_session_${tabA}=${ta}; campus_session_${tabB}=${tb}`;
+ const call=(tab,path,method='GET',data)=>worker.fetch(new Request(origin+'/api/'+path,{method,headers:{Cookie:cookies,Origin:origin,'Content-Type':'application/json','X-Session-Tab':tab},body:data?JSON.stringify(data):undefined}),env);
+ const group=await (await call(tabA,'groups','POST',{name:'Two tab group'})).json();
+ assert.equal((await call(tabA,`groups/${group.id}/members`,'POST',{email:'b@example.com'})).status,201);
+ const invites=await (await call(tabB,'invitations')).json();assert.equal(invites.length,1);
+ assert.equal((await call(tabB,`invitations/${invites[0].id}`,'POST',{decision:'accept'})).status,200);
+ assert.equal((await (await call(tabB,'groups')).json())[0].id,group.id);
+ assert.equal((await (await call(tabA,`groups/${group.id}`)).json()).members.length,2);
+ assert.equal((await call(tabB,`groups/${group.id}`,'PATCH',{name:'Forbidden',description:'x'})).status,403);
+ assert.equal((await call(tabA,`groups/${group.id}`,'PATCH',{name:'Renamed',description:'Our project'})).status,200);
+ const info=await (await call(tabB,`groups/${group.id}`)).json();assert.equal(info.group.name,'Renamed');assert.equal(info.group.description,'Our project');assert.ok('avatar' in info.members[0]);
+});
+
+test('project assignment invitation and member application are scoped and exclusive',async()=>{
+ const {createGroup,addGroupMember,respondInvitation,listInvitations,projectAction,applyForTask,reviewTaskCandidate,respondToAssignment,groupSnapshot}=await import('../src/collaboration.js');
+ const env={DB:database()};
+ for(const id of ['owner','member','other'])await env.DB.prepare('INSERT INTO users(id,email,password_hash,created) VALUES(?,?,?,0)').bind(id,id+'@example.com','unused').run();
+ await env.DB.prepare("INSERT INTO subscriptions(id,data,created,user_id) VALUES('member-push','{}',0,'member')").run();
+ const group=await createGroup(env,'owner',{name:'Project team'});
+ await addGroupMember(env,'owner',group.id,'member@example.com');
+ assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM jobs WHERE user_id='member'").first()).n,1);
+ const invitation=(await listInvitations(env,'member'))[0];await respondInvitation(env,'member',invitation.id,'accept');
+ const project=await projectAction(env,'owner',group.id,{title:'Course project'});
+ await assert.rejects(()=>projectAction(env,'member',group.id,{title:'Forbidden'}),{status:403});
+ const open=await projectAction(env,'owner',group.id,{projectId:project.id,title:'Research'});
+ await assert.rejects(()=>applyForTask(env,'other',open.id),{status:404});
+ await applyForTask(env,'member',open.id);
+ await assert.rejects(()=>applyForTask(env,'member',open.id),{status:409});
+ const assignment=await reviewTaskCandidate(env,'owner',open.id,{decision:'confirm',changes:{proposedAssigneeId:'member'}});
+ assert.equal(assignment.acceptance_status,'pending');
+ await assert.rejects(()=>applyForTask(env,'member',open.id),{status:409});
+ await assert.rejects(()=>respondToAssignment(env,'owner',assignment.id,'accept'),{status:404});
+ const accepted=await respondToAssignment(env,'member',assignment.id,'accept');assert.equal(accepted.acceptance_status,'accepted');
+ const invited=await projectAction(env,'owner',group.id,{projectId:project.id,title:'Write-up',proposedAssigneeId:'member'});
+ await assert.rejects(()=>applyForTask(env,'member',invited.id),{status:409});
+ const snapshot=await groupSnapshot(env,'member',group.id);assert.equal(snapshot.projects.length,1);assert.equal(snapshot.tasks.length,2);
+ assert.equal(snapshot.applications[0].status,'approved');
+ assert.ok((await env.DB.prepare("SELECT COUNT(*) n FROM group_notifications WHERE user_id='owner'").first()).n>=2);
+});
+
+test('school sender address is account scoped and saved configuration wins',async()=>{
+ const {schoolAddress}=await import('../src/mail.js');const env={DB:database(),LOGIN_EMAIL:'owner@example.com',SCHOOL_EMAIL:'owner@ln.hk'};
+ for(const [id,email] of [['owner','owner@example.com'],['member','member@ln.hk'],['other','other@example.com']])await env.DB.prepare('INSERT INTO users(id,email,password_hash,created) VALUES(?,?,?,0)').bind(id,email,'unused').run();
+ assert.equal(await schoolAddress(env,'owner'),'owner@ln.hk');assert.equal(await schoolAddress(env,'member'),'member@ln.hk');assert.equal(await schoolAddress(env,'other'),'');
+ await env.DB.prepare('INSERT INTO kv(key,value) VALUES(?,?)').bind('school_email:other','student@ln.hk').run();assert.equal(await schoolAddress(env,'other'),'student@ln.hk');assert.equal(await schoolAddress(env,'owner'),'owner@ln.hk');
+});
+
+test('OAuth provider failure shows a retry page and preserves existing mailbox',async()=>{
+ const env={DB:database()},token=random(),origin='https://campus.example';
+ await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('oauth-user','test@example.com','unused',0)").run();
+ const session=await hash(token);
+ await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(session,Date.now()+3600000,'oauth-user').run();
+ await env.DB.prepare('INSERT INTO oauth(state,verifier,session,expires,user_id) VALUES(?,?,?,?,?)').bind('test-state','v',session,Date.now()+600000,'oauth-user').run();
+ const response=await worker.fetch(new Request(origin+'/api/outlook/callback?error=server_error&state=test-state',{headers:{Cookie:'campus_session='+token}}),env);
+ assert.match(response.headers.get('content-type'),/text\/html/);
+ const html=await response.text();assert.match(html,/Microsoft/);assert.match(html,/重新连接/);assert.doesNotMatch(html,/登录请求失效/);
+ assert.equal(await env.DB.prepare('SELECT * FROM oauth WHERE state=?').bind('test-state').first(),null);
+});
+
+test('group owners can edit published work without changing assignment state',async()=>{
+ const env={DB:database()},origin='https://campus.example',tokens={owner:random(),member:random(),outsider:random()};
+ for(const [id,token] of Object.entries(tokens)){
+  await env.DB.prepare('INSERT INTO users(id,email,password_hash,created) VALUES(?,?,?,0)').bind(id,id+'@example.com','unused').run();
+  await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,id).run();
+ }
+ const call=(actor,path,method='GET',data)=>worker.fetch(new Request(origin+'/api/'+path,{method,headers:{Cookie:'campus_session='+tokens[actor],Origin:origin,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined}),env);
+ const group=await (await call('owner','groups','POST',{name:'Original group'})).json();
+ const base=`groups/${group.id}`;
+ await env.DB.prepare("INSERT INTO group_members(group_id,user_id,role,joined) VALUES(?,'member','member',0)").bind(group.id).run();
+ await env.DB.prepare("INSERT INTO subscriptions(id,data,created,user_id) VALUES('member-push','{}',0,'member')").run();
+ const {id:projectId}=await (await call('owner',base+'/projects','POST',{title:'Project'})).json();
+ assert.equal((await call('member',base,'PATCH',{name:'Forbidden'})).status,403);
+ assert.equal((await call('owner',base,'PATCH',{name:'New group name'})).status,200);
+ assert.equal((await call('owner',base+'/projects/'+projectId,'PATCH',{title:'New project name',notes:'Project details'})).status,200);
+ const candidate=await (await call('owner',base+'/projects','POST',{projectId,title:'Open task'})).json();
+ assert.equal((await call('member',`task-candidates/${candidate.id}/apply`,'POST',{})).status,200);
+ const editOpen={title:'Revised open task',notes:'Open details',due:null,updated:candidate.updated};
+ assert.equal((await call('owner',base+'/candidates/'+candidate.id,'PATCH',editOpen)).status,200);
+ assert.equal((await call('owner',base+'/candidates/'+candidate.id,'PATCH',editOpen)).status,409);
+ const review=await call('owner',`task-candidates/${candidate.id}/review`,'POST',{decision:'confirm',changes:{proposedAssigneeId:'member'}});
+ assert.equal(review.status,200);
+ const task=await review.json(),path=base+'/tasks/'+task.id,due=Date.now()+7*86400000;
+ assert.equal(task.title,editOpen.title);
+ assert.equal(task.acceptance_status,'pending');
+ const patch={title:'Published update',notes:'Updated scope',due,version:task.version};
+ assert.equal((await call('member',path,'PATCH',patch)).status,403);
+ assert.equal((await call('outsider',path,'PATCH',patch)).status,404);
+ assert.equal((await call('owner',path,'PATCH',patch)).status,200);
+ assert.equal((await call('owner',path,'PATCH',patch)).status,409);
+ const accepted=await call('member',`tasks/${task.id}/assignment`,'POST',{decision:'accept'});
+ assert.equal(accepted.status,200);
+ const current=await accepted.json(),newDue=due+86400000;
+ assert.equal((await call('owner',path,'PATCH',{...patch,title:'Final title',due:newDue,version:current.version})).status,200);
+ const old=await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE task_id=? AND version=? AND state='pending'").bind(task.id,current.version).first();
+ const fresh=await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE task_id=? AND version=? AND state='pending'").bind(task.id,current.version+1).first();
+ assert.equal(old.n,0);
+ assert.ok(fresh.n>0);
+ const snapshot=await (await call('member',base)).json();
+ assert.equal(snapshot.group.name,'New group name');
+ assert.equal(snapshot.projects[0].title,'New project name');
+ assert.equal(snapshot.projects[0].notes,'Project details');
+ assert.equal(snapshot.candidates[0].title,'Final title');
+ assert.equal(snapshot.applications[0].status,'approved');
+ const [personal]=await (await call('member','tasks')).json();
+ assert.equal(personal.title,'Final title');
+ assert.equal(personal.notes,'Updated scope');
+ assert.equal(personal.due,newDue);
+ assert.equal(personal.acceptance_status,'accepted');
+ assert.equal(personal.user_id,'member');
+
+ const repeated={projectId,title:personal.title,notes:personal.notes,due:personal.due,proposedAssigneeId:'member'};
+ for(let i=0;i<3;i++)assert.equal((await call('owner',base+'/projects','POST',repeated)).status,409);
+ const otherTask=await call('owner',base+'/projects','POST',{...repeated,notes:'Different details'});
+ assert.equal(otherTask.status,201);
+ const otherCandidate=await otherTask.json();
+ const openTask={projectId,title:'Open for anyone'};
+ const open=await (await call('owner',base+'/projects','POST',openTask)).json();
+ assert.equal((await call('owner',base+'/projects','POST',openTask)).status,409);
+ assert.equal((await call('member',`task-candidates/${open.id}/apply`,'POST',{})).status,200);
+ assert.equal((await call('owner',base+'/candidates/'+open.id,'DELETE',{updated:open.updated})).status,200);
+
+ const version=current.version+1;
+ assert.equal((await call('member',path,'DELETE',{version})).status,403);
+ assert.equal((await call('outsider',path,'DELETE',{version})).status,404);
+ assert.equal((await call('owner',path,'DELETE',{version:current.version})).status,409);
+ assert.equal((await call('owner',path,'DELETE',{version})).status,200);
+ const remaining=await (await call('owner',base)).json();
+ assert.deepEqual(remaining.candidates.map(row=>row.id),[otherCandidate.id]);
+ assert.deepEqual(remaining.tasks.map(row=>row.candidate_id),[otherCandidate.id]);
+ assert.equal(remaining.applications.length,0);
+ assert.equal((await (await call('member','tasks')).json()).length,0);
+ assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM jobs WHERE task_id=? AND state IN ('pending','sending')").bind(task.id).first()).n,0);
+ assert.equal((await call('owner',base+'/projects','POST',repeated)).status,201);
+});
