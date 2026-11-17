@@ -1,0 +1,24 @@
+{
+  // Campus Companion in the handover account (Makaii0916@gmail.com's Account).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "campus-companion",
+  "account_id": "57a3dca744df61def7f992e93a387707",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-09-22",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "campus-companion", "database_id": "3d5b6abf-c4fc-4874-854e-a9d012667e24", "migrations_dir": "migrations" }
+  ],
+  "ai": { "binding": "AI" },
+  "triggers": { "crons": ["* * * * *"] },
+  "workers_dev": true,
+  "vars": {
+    "APP_ORIGIN": "https://campus-companion.campus-companion-ln.workers.dev",
+    "ENABLE_AI": "true",
+    "LOGIN_EMAIL": "mayikai0916@gmail.com",
+    "OWNER_EMAIL": "mayikai0916@gmail.com",
+    "SCHOOL_EMAIL": "yikaima@ln.hk",
+    "MS_CLIENT_ID": "eeb24f96-510a-48e0-a792-0b81333703d5"
+  }
+}
