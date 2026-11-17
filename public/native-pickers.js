@@ -38,6 +38,7 @@ function upgrade(input) {
     button.textContent = text;
     button.classList.toggle('is-empty', !value);
     button.setAttribute('aria-label', `${labelText(input)} ${text}`.trim());
+    button.dataset.labelSource = button.getAttribute('aria-label');
   };
   // When app.js sets input.value = '…' in code, refresh the button text too.
   Object.defineProperty(input, 'value', {

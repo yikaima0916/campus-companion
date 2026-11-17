@@ -12,6 +12,7 @@ export function updateThemeLabels() {
   const label = root.dataset.theme === 'dark' ? light : dark;
   buttons().forEach(button => {
     button.setAttribute('aria-label', label);
+    button.dataset.labelSource = label;
     button.title = label;
     button.setAttribute('aria-pressed', String(root.dataset.theme === 'dark'));
     button.innerHTML = root.dataset.theme === 'dark'
