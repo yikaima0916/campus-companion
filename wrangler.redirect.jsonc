@@ -1,0 +1,9 @@
+{
+  // Original Campus Companion address in Yikamai0916@gmail.com's Account: redirect only, no AI, no cron.
+  "name": "campus-companion",
+  "account_id": "b9f6bf4c077b60ef468ed069ac334d62",
+  "main": "redirect/worker.js",
+  "compatibility_date": "2026-09-22",
+  "workers_dev": true,
+  "triggers": { "crons": [] }
+}

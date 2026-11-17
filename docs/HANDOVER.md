@@ -18,9 +18,9 @@ Deploy with `npx wrangler deploy --config wrangler.handover.jsonc`.
 - Outlook connections were removed from the new database because their tokens were encrypted with the original `TOKEN_KEY`, which cannot be read back. Each user reconnects Outlook once.
 - New secrets were generated: `TOKEN_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `SHORTCUT_INGEST_KEY`, `PASSWORD_HASH` (random; the legacy owner fallback is disabled). Existing push subscriptions and any iPhone Shortcut need to be set up again.
 
-## Still to do
+## Completed after migration (2026-11-17)
 
-1. Microsoft Entra app `eeb24f96-510a-48e0-a792-0b81333703d5`:
-   - Certificates & secrets → New client secret, then run `npx wrangler secret put MS_CLIENT_SECRET --config wrangler.handover.jsonc` and paste the value.
-   - Authentication → Web → add the redirect URI `https://campus-companion.campus-companion-ln.workers.dev/api/outlook/callback`.
-2. Retire the original deployment in the Yikamai0916@gmail.com account after the new site is confirmed.
+- `MS_CLIENT_SECRET` set by the owner; the new redirect URI was added to the Microsoft Entra app `eeb24f96-510a-48e0-a792-0b81333703d5` (managed by xrforzsyx@outlook.com). Signed-in status reports Outlook configured.
+- The interface opens in English for new visitors, including browsers set to Chinese.
+- The original address `https://campus-companion.campus-companion.workers.dev` (Yikamai0916@gmail.com's Account) now runs `redirect/worker.js` (`wrangler.redirect.jsonc`): a 301 to the new address with no AI and no cron. Its D1 database `campus-companion` (`d4251b8d-…`) and earlier Worker versions are kept as a backup.
+- Workers AI: this Worker has no app-level cap; it uses this account's Cloudflare allocation (10,000 neurons per day on Workers Free).
