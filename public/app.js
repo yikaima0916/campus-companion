@@ -588,11 +588,15 @@ function digestLede(o){
 // always chooses: links open the original form, drafts are only copied or opened in mail.
 const assistResults=new Map(),assistLoading=new Set();
 const briefUrls=b=>[...new Set([...(b.actions||[]),...(b.points||[])].flatMap(p=>`${p.text||''} ${p.evidence||''}`.match(/https?:\/\/[^\s<>"'）)\]]+/g)||[]).map(u=>u.replace(/[.,;:。，]+$/,'')))];
+// Decide from what the AI listed as requests for the reader. Registration counts only when the
+// request itself asks to register and nothing in the email says registration is not needed.
+const NO_REGISTRATION=/\b(?:no (?:registration|sign[ -]?up|need to (?:register|sign up))|(?:registration|sign[ -]?up) (?:is )?(?:not (?:required|needed)|unnecessary)|without (?:registration|registering)|walk[ -]?in|free (?:entry|admission))\b|無需報名|无需报名|毋須報名|毋须报名|不用報名|不用报名|不需報名|不需报名|免報名|免报名|不設報名|不设报名|無須登記|无须登记|自由參加|自由参加/i;
 function suggestionKinds(b){
-  const acts=(b?.actions||[]).map(p=>`${p.text||''} ${p.evidence||''}`).join(' ');
+  const acts=(b?.actions||[]).map(p=>String(p.text||'')).join(' ');
+  const all=[...(b?.points||[]),...(b?.actions||[])].map(p=>`${p.text||''} ${p.evidence||''}`).join(' ');
   const kinds=[];
-  if(/\b(?:reply|respond|RSVP|let (?:us|me) know|confirm (?:your|whether|if)|email (?:us|me) back)\b|回覆|回复|回信|告知/i.test(acts))kinds.push('reply');
-  if(/\b(?:regist(?:er|ration)|sign[ -]?up|enrol(?:l|ment)?|apply|application)\b|報名|报名|登記|登记|申請|申请/i.test(acts))kinds.push('register');
+  if(/\b(?:reply|respond|RSVP|let (?:us|me) know|confirm (?:your attendance|whether|if)|email (?:us|me) back)\b|回覆|回复|回信|告知/i.test(acts))kinds.push('reply');
+  if(!NO_REGISTRATION.test(all)&&/\b(?:regist(?:er|ration)|sign[ -]?up|enrol(?:l|ment)?|apply|application)\b|報名|报名|登記|登记|申請|申请/i.test(acts))kinds.push('register');
   return kinds;
 }
 function digestSuggestion(it,brief,key){
