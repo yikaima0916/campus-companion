@@ -14,7 +14,11 @@ let locale='en';
 let reminderDefaults={offsets:[4320,1440,120,30],repeat:1440,start:'08:00',end:'23:00'};
 function detectLocale(){const saved=localStorage.getItem('campus-locale');if(saved&&I18N[saved])return saved;return 'en';}
 function updateDateLabel(){const el=document.getElementById('date-label');if(el)el.textContent=new Date().toLocaleDateString(dateLocale(),{timeZone:'Asia/Hong_Kong',year:'numeric',month:'long',day:'numeric',weekday:'long'});}
-function applyLocale(next){locale=I18N[next]?next:'en';document.documentElement.lang=locale;document.title=I18N[locale].appName;const metaDescription=$('meta[name=description]');if(metaDescription&&I18N[locale].appDescription)metaDescription.content=I18N[locale].appDescription;for(const el of $$('[data-i18n]')){const value=I18N[locale][el.dataset.i18n];if(value!==undefined)el.innerHTML=value;}for(const el of $$('[data-i18n-placeholder]')){const value=I18N[locale][el.dataset.i18nPlaceholder];if(value!==undefined)el.placeholder=value;}for(const el of $$('[data-i18n-aria]')){const value=I18N[locale][el.dataset.i18nAria];if(value!==undefined)el.setAttribute('aria-label',value);}const staticText={'.login h1':'heroTitle','.login>p':'heroSubtitle','.private':'personalAccount','.tasks-eyebrow':'tasksEyebrow'};for(const [selector,key] of Object.entries(staticText)){const el=$(selector),value=I18N[locale][key];if(el&&value!==undefined)el.innerHTML=value;}const logoutButton=$('#logout');if(logoutButton)logoutButton.setAttribute('aria-label',tx('logout'));translateTextNodes();updateDateLabel();refreshSelects();updateManifestLocale();document.documentElement.classList.remove('i18n-pending');}
+const NAV_SHORT={'zh-CN':{tasks:'待办',groups:'小组',mail:'邮件',digests:'日报',settings:'设置'},'zh-TW':{tasks:'待辦',groups:'小組',mail:'郵件',digests:'日報',settings:'設定'},en:{tasks:'Tasks',groups:'Groups',mail:'Mail',digests:'Digest',settings:'Settings'}};
+// Phone tab bar: one icon set (Lucide, ISC licence) and short labels.
+const NAV_ICON={"tasks": "<path d=\"M9 11l3 3 8-8\"/><path d=\"M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9\"/>", "groups": "<path d=\"M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2\"/><circle cx=\"9\" cy=\"7\" r=\"4\"/><path d=\"M22 21v-2a4 4 0 0 0-3-3.87\"/><path d=\"M16 3.13a4 4 0 0 1 0 7.75\"/>", "mail": "<rect x=\"2\" y=\"4\" width=\"20\" height=\"16\" rx=\"2\"/><path d=\"m22 7-10 6L2 7\"/>", "digests": "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 7v5l3 2\"/>", "settings": "<path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\"/><circle cx=\"12\" cy=\"12\" r=\"3\"/>"};
+function shortNav(){const m=NAV_SHORT[locale]||NAV_SHORT.en;$$('nav [data-view]').forEach(b=>{b.dataset.short=m[b.dataset.view]||'';const icon=b.querySelector('span');if(icon&&!icon.querySelector('svg')&&NAV_ICON[b.dataset.view])icon.innerHTML=`<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${NAV_ICON[b.dataset.view]}</svg>`;});}
+function applyLocale(next){queueMicrotask(shortNav);locale=I18N[next]?next:'en';document.documentElement.lang=locale;document.title=I18N[locale].appName;const metaDescription=$('meta[name=description]');if(metaDescription&&I18N[locale].appDescription)metaDescription.content=I18N[locale].appDescription;for(const el of $$('[data-i18n]')){const value=I18N[locale][el.dataset.i18n];if(value!==undefined)el.innerHTML=value;}for(const el of $$('[data-i18n-placeholder]')){const value=I18N[locale][el.dataset.i18nPlaceholder];if(value!==undefined)el.placeholder=value;}for(const el of $$('[data-i18n-aria]')){const value=I18N[locale][el.dataset.i18nAria];if(value!==undefined)el.setAttribute('aria-label',value);}const staticText={'.login h1':'heroTitle','.login>p':'heroSubtitle','.private':'personalAccount','.tasks-eyebrow':'tasksEyebrow'};for(const [selector,key] of Object.entries(staticText)){const el=$(selector),value=I18N[locale][key];if(el&&value!==undefined)el.innerHTML=value;}const logoutButton=$('#logout');if(logoutButton)logoutButton.setAttribute('aria-label',tx('logout'));translateTextNodes();updateDateLabel();refreshSelects();updateManifestLocale();document.documentElement.classList.remove('i18n-pending');}
 function updateManifestLocale(){const link=$('link[rel=manifest]');if(!link)return;if(!link.dataset.src)link.dataset.src=link.href;fetch(link.dataset.src).then(response=>response.ok?response.json():null).then(manifest=>{if(!manifest)return;manifest.name=I18N[locale].appName;manifest.short_name=I18N[locale].appName;manifest.lang=locale;if(I18N[locale].appDescription)manifest.description=I18N[locale].appDescription;link.href=URL.createObjectURL(new Blob([JSON.stringify(manifest)],{type:'application/manifest+json'}));}).catch(()=>{});}
 const tx=key=>I18N[locale]?.[key]||I18N.en[key]||I18N['zh-CN'][key]||key;
 
@@ -187,6 +191,26 @@ const reminderPicker = new TaskReminderPicker({
   notify: text => toast(text),
 });
 
+// Ask AI for the task title, the time stated in the email and short notes, then fill the open
+// dialog. Fields the student has already edited are left alone. The result is saved on the server.
+async function aiFillTaskForm(messageId,subject){
+  const f=$('#task-form'),dialog=$('#task-dialog'),hint=$('#mail-task-hint');if(!f||!messageId)return;
+  const edited=new Set();const mark=e=>edited.add(e.target.name);f.addEventListener('input',mark);
+  const fields=[f.elements.title,f.elements.notes];
+  dialog.classList.add('ai-filling');fields.forEach(x=>x.classList.add('ai-shimmer'));
+  if(hint){hint.classList.remove('hidden');hint.innerHTML=`<span class="dg-ai-loading"><span class="dg-ai-orb" aria-hidden="true"></span>${esc(local('AI 正在从邮件中识别事件和时间','AI 正在從郵件中識別事件和時間','AI is reading the event and time from the email'))}<span class="dg-ai-dots" aria-hidden="true"><i></i><i></i><i></i></span></span>`;}
+  let r=null;try{r=await api('messages/'+encodeURIComponent(messageId)+'/assist',{method:'POST',body:{mode:'task',locale}});}catch{}
+  f.removeEventListener('input',mark);
+  dialog.classList.remove('ai-filling');fields.forEach(x=>x.classList.remove('ai-shimmer'));
+  if(!dialog.open||mailTaskDraft?.messageId!==messageId)return;
+  if(!r||r.error){if(hint)hint.textContent=local('AI 暂时不可用，已按邮件内容预填，请核对后保存。','AI 暫時不可用，已按郵件內容預填，請核對後儲存。','AI is unavailable. Fields were prefilled from the email; please check before saving.');return;}
+  const flash=el=>{el.classList.remove('ai-filled');void el.offsetWidth;el.classList.add('ai-filled');};
+  if(r.title&&!edited.has('title')){f.elements.title.value=r.title;flash(f.elements.title);}
+  if(r.notes&&!edited.has('notes')){f.elements.notes.value=[r.notes,`${local('来源邮件：','來源郵件：','Source email: ')}${subject||''}`].filter(Boolean).join('\n');flash(f.elements.notes);}
+  if(r.due){reminderPicker.setDue(r.due);const box=f.querySelector('.due-field, [name=due]')?.closest('label,div');if(box)flash(box);}
+  const when=r.due?fmt(r.due):'';
+  if(hint)hint.textContent=r.kind==='deadline'?local(`AI 找到了截止时间（${when}），请核对后保存。`,`AI 找到了截止時間（${when}），請核對後儲存。`,`AI found the deadline (${when}). Check it before saving.`):r.kind==='event'?local(`AI 填入了活动开始时间（${when}），请核对后保存。`,`AI 填入了活動開始時間（${when}），請核對後儲存。`,`AI filled in the event start time (${when}). Check it before saving.`):local('邮件没有写明时间，请自己选择时间。','郵件沒有寫明時間，請自己選擇時間。','The email gives no time. Choose one yourself.');
+}
 function openForm(task=null,mailDraft=null){
   editing=task;
   mailTaskDraft=mailDraft;
@@ -797,7 +821,7 @@ function bindDigestEvents(){
     const mailto=find('[data-dg-mailto]');
     if(mailto){const area=root.querySelector(`[data-dg-draft="${mailto.dataset.dgMailto}"]`);location.href=`mailto:${encodeURIComponent(mailto.dataset.to)}?subject=${encodeURIComponent(mailto.dataset.subject||'')}&body=${encodeURIComponent(area?.value||'')}`;return;}
     const addTask=find('[data-dg-add-task]');
-    if(addTask){const {r}=rowOf(addTask.dataset.dgAddTask);if(!r||r.when===null||r.item.ignored||!r.item.id)return;openForm(null,{messageId:r.item.id,title:r.headline.slice(0,200),notes:[r.gist.text||r.item.summary||'',`${local('来源邮件：','來源郵件：','Source email: ')}${r.item.subject||r.headline}`].filter(Boolean).join('\n'),due:suggestedTaskDue(r.item,r.when),priority:r.tier==='act'?1:2});return;}
+    if(addTask){const {r}=rowOf(addTask.dataset.dgAddTask);if(!r||r.when===null||r.item.ignored||!r.item.id)return;openForm(null,{messageId:r.item.id,title:r.headline.slice(0,200),notes:[r.gist.text||r.item.summary||'',`${local('来源邮件：','來源郵件：','Source email: ')}${r.item.subject||r.headline}`].filter(Boolean).join('\n'),due:suggestedTaskDue(r.item,r.when),priority:r.tier==='act'?1:2});aiFillTaskForm(r.item.id,r.item.subject||r.headline);return;}
     const open=find('[data-dg-open]');
     if(open){const {r}=rowOf(open.dataset.dgOpen);if(r?.item.id){history.replaceState(null,'','/?view=mail&message='+encodeURIComponent(r.item.id));view('mail');openMailDetail(r.item.id);}return;}
     const brief=find('[data-dg-brief]');

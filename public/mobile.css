@@ -1,0 +1,51 @@
+/* Phone layout. Loaded last so it settles the older mobile rules in style, ios and theme CSS.
+   Bottom bar follows the common iOS tab bar pattern: equal columns, icon over a short label. */
+@media (max-width:700px){
+  html,body,.shell,main{background:var(--bg)}
+  aside{padding:calc(12px + env(safe-area-inset-top)) 16px 0}
+  aside .brand{font-size:17px}
+  main{padding:0 14px calc(104px + env(safe-area-inset-bottom));min-height:0}
+  h1,.page-heading h1{font-size:28px;line-height:1.15;letter-spacing:-.02em}
+
+  /* bottom tab bar */
+  nav{position:fixed;z-index:100;left:12px;right:12px;bottom:calc(10px + env(safe-area-inset-bottom));transform:none;
+    display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:2px;width:auto;max-width:none;margin:0;padding:6px;overflow:visible;
+    border-radius:24px;border:1px solid color-mix(in srgb,var(--surface-3) 70%,transparent);
+    background:color-mix(in srgb,var(--surface) 82%,transparent);-webkit-backdrop-filter:saturate(1.6) blur(18px);backdrop-filter:saturate(1.6) blur(18px);
+    box-shadow:0 10px 30px rgba(32,58,54,.14)}
+  nav button,nav button:hover{position:relative;display:flex;flex:none;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    min-width:0;min-height:54px;padding:6px 2px;border-radius:18px;background:transparent;color:var(--muted-text);
+    font-size:0;letter-spacing:0;white-space:nowrap;box-shadow:none;transform:none}
+  nav button em{display:none}
+  nav button::after{content:attr(data-short);font-size:11px;font-weight:700;font-style:normal;line-height:1.1;letter-spacing:0}
+  nav button span{display:grid;place-items:center;width:44px;height:28px;border-radius:14px;font-size:18px;line-height:1;transition:background .25s,color .25s,transform .25s}
+  nav .active,nav .active:hover{background:transparent;color:var(--ink)}
+  nav button span svg{display:block}
+  nav .active span{background:var(--accent-soft);color:var(--accent-strong);transform:translateY(-1px)}
+  nav button:active span{transform:scale(.9)}
+  nav #nav-count{position:absolute;top:3px;left:calc(50% + 8px);min-width:18px;height:18px;padding:0 5px;border-radius:9px;
+    font-size:10.5px;line-height:18px;font-weight:800;text-align:center;background:var(--accent-strong);color:#fff}
+  nav #nav-count:empty,nav #nav-count[data-zero]{display:none}
+
+  /* cards breathe less on a small screen */
+  .setting-card,.mail-card,.dg-card{padding:18px 16px;border-radius:22px}
+  .dg-stats{gap:8px}
+  .dg-stat{padding:12px 12px}
+  .dg-stat b{font-size:1.5rem}
+  .dg-head{padding:12px 12px}
+  .dg-body-inner{padding-left:12px;padding-right:12px}
+  .dg-actions{gap:8px}
+  .dg-actions .dg-btn{flex:1 1 calc(50% - 8px);padding:11px 12px}
+  .dg-suggest{padding:12px}
+
+  /* task dialog as a bottom sheet */
+  dialog#task-dialog{width:100%;max-width:none;max-height:calc(100dvh - 24px - env(safe-area-inset-top));margin:auto 0 0;border-radius:24px 24px 0 0;
+    padding-bottom:calc(16px + env(safe-area-inset-bottom));animation:sheet-up .32s cubic-bezier(.22,1,.36,1)}
+  dialog#task-dialog::backdrop{background:rgba(20,32,29,.38);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
+  #task-dialog .form-row{grid-template-columns:1fr}
+}
+@media (max-width:360px){nav button::after{font-size:10px}nav button span{width:38px}}
+@keyframes sheet-up{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){dialog#task-dialog{animation:none}}
+
+nav button em{font-style:normal}

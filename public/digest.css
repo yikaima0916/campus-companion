@@ -180,3 +180,9 @@
 @keyframes dg-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
 @keyframes dg-reveal{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.dg-ai-orb,.dg-ai-dots i,.dg-skel.is-ai span,.dg-reveal,.dg-reveal li,.dg-card .dg-btn[aria-busy="true"]::after{animation:none}}
+/* AI filling the task dialog */
+#task-dialog .ai-shimmer{color:transparent;background:linear-gradient(90deg,var(--surface-2) 0%,color-mix(in srgb,var(--accent-soft) 80%,#fff) 40%,var(--surface-2) 80%);background-size:300% 100%;animation:dg-shimmer 1.4s ease-in-out infinite}
+#task-dialog .ai-filled{animation:ai-filled 1.1s ease-out}
+#mail-task-hint .dg-ai-loading{font-size:inherit}
+@keyframes ai-filled{0%{box-shadow:0 0 0 0 var(--accent-soft);background-color:color-mix(in srgb,var(--accent-soft) 70%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
+@media (prefers-reduced-motion:reduce){#task-dialog .ai-shimmer,#task-dialog .ai-filled{animation:none}}
