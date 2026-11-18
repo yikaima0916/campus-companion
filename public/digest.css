@@ -186,3 +186,12 @@
 #mail-task-hint .dg-ai-loading{font-size:inherit}
 @keyframes ai-filled{0%{box-shadow:0 0 0 0 var(--accent-soft);background-color:color-mix(in srgb,var(--accent-soft) 70%,transparent)}100%{box-shadow:0 0 0 6px transparent}}
 @media (prefers-reduced-motion:reduce){#task-dialog .ai-shimmer,#task-dialog .ai-filled{animation:none}}
+
+/* AI suggestion results: one compact panel instead of separate cards */
+.dg-suggest .dg-suggest-out .dg-brief-points{gap:0;padding:4px 0;border-radius:14px;background:var(--surface);border:1px solid var(--surface-3)}
+.dg-suggest .dg-suggest-out .dg-brief-points li{padding:8px 14px 8px 30px;border-radius:0;background:transparent;font-size:.9rem;line-height:1.5}
+.dg-suggest .dg-suggest-out .dg-brief-points li+li{border-top:1px solid var(--surface-3)}
+.dg-suggest .dg-suggest-out .dg-brief-points li::before{top:15px}
+.dg-suggest .dg-suggest-text{margin-top:2px}
+.dg-suggest .dg-actions{margin-top:10px}
+.dg-suggest .dg-suggest-out{margin-top:10px}
