@@ -1,5 +1,5 @@
 import { schoolAddress } from './mail.js';
-import {attachBriefs,generateBrief,readBrief,preGenerateBriefs} from './mail-briefs.js';
+import {attachBriefs,prepareNewMail,generateBrief,readBrief,preGenerateBriefs} from './mail-briefs.js';
 import {assistMail,normalizeProfile} from './mail-assist.js';
 import { meetingTask,wording } from './display.js';
 import { serverMessage,normalizeLocale } from './errors.js';
@@ -51,7 +51,7 @@ async function routes(request,env,ctx){
     if(!env.SHORTCUT_INGEST_KEY)return json({error:serverMessage('iPhone 邮件转交尚未配置',uiLocale)},503);
     const supplied=request.headers.get('Authorization')?.replace(/^Bearer\s+/i,'')||'';
     if(!supplied||await hash(supplied)!==await hash(env.SHORTCUT_INGEST_KEY))return json({error:serverMessage('邮件转交密钥无效',uiLocale)},401);
-    const owner=await ownerUser(env);return json({ok:true,...await ingestShortcutEmail(env,await body(request),owner?.id)},201);
+    const owner=await ownerUser(env);const result=await ingestShortcutEmail(env,await body(request),owner?.id);if(result.id&&ctx?.waitUntil)ctx.waitUntil(prepareNewMail(env,owner.id,[result.id]));return json({ok:true,...result},201);
   }
   if(path==='/api/auth/config'&&method==='GET')return json({registration:'simple',passwordMin:12});
   if(path==='/api/register'&&method==='POST'){
@@ -120,7 +120,7 @@ async function routes(request,env,ctx){
     if(preferredZhName.length>40)return json({error:serverMessage('偏好中文译名最多 40 个字符',uiLocale)},400);
     if(linkedEmail&&!validEmail(linkedEmail))return json({error:serverMessage('关联邮箱格式不正确',uiLocale)},400);
     const reminders={...defaultReminder,...parseReminder(current?.reminder_defaults),...(data.reminders||{})};
-    const mailPreferences=parseMailPreferences(data.mailPreferences===undefined?current?.mail_preferences:data.mailPreferences);
+    const mailPreferences=parseMailPreferences(data.mailPreferences===undefined?current?.mail_preferences:{...parseMailPreferences(current?.mail_preferences),...data.mailPreferences});
     // presets = the user's saved custom "截止前提醒" chips (minutes). Clean them instead of rejecting.
     reminders.presets=normalizePresets(reminders.presets);
     if(!Array.isArray(reminders.offsets)||reminders.offsets.length>12||reminders.offsets.some(n=>!Number.isInteger(n)||n<0||n>525600)||!Number.isFinite(Number(reminders.repeat))||Number(reminders.repeat)<0)return json({error:serverMessage('提醒配置不正确',uiLocale)},400);
@@ -352,13 +352,13 @@ async function routes(request,env,ctx){
       const message=error.oauthFailure?error.message:'本次 Outlook 连接未完成，请返回设置重新发起连接。';
       return new Response(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Outlook 连接未完成</title><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/theme.css"></head><body><main style="max-width:600px;margin:12vh auto;padding:24px"><section class="setting-card"><h1>Outlook 连接未完成</h1><p>${message}</p><p><a class="primary" href="/api/outlook/start">重新连接 Microsoft ↗</a></p><a href="/?view=settings">返回设置</a></section></main></body></html>`,{status:400,headers:{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer'}});
     }
-    try{const result=await syncMail(env,account.user_id);if(result.importedIds?.length){const translations=preGenerateMailTranslations(env,account.user_id,result.importedIds).catch(()=>{});if(ctx?.waitUntil)ctx.waitUntil(translations);else await translations;}}catch(error){await env.DB.prepare('UPDATE outlook_connections SET status=? WHERE user_id=?').bind(String(error.message).slice(0,300),account.user_id).run();}
+    try{const result=await syncMail(env,account.user_id);if(result.importedIds?.length&&ctx?.waitUntil)ctx.waitUntil(prepareNewMail(env,account.user_id,result.importedIds));if(result.importedIds?.length){const translations=preGenerateMailTranslations(env,account.user_id,result.importedIds).catch(()=>{});if(ctx?.waitUntil)ctx.waitUntil(translations);else await translations;}}catch(error){await env.DB.prepare('UPDATE outlook_connections SET status=? WHERE user_id=?').bind(String(error.message).slice(0,300),account.user_id).run();}
     // 后台预生成新邮件的 AI 摘要（不阻塞跳转）
     try{const briefs=preGenerateBriefs(env,account.user_id).catch(()=>{});if(ctx?.waitUntil)ctx.waitUntil(briefs);}catch{}
     return Response.redirect(url.origin+'/?view=settings');
   }
   if(path==='/api/outlook/sync'&&method==='POST'){
-    const result=await syncMail(env,account.user_id);
+    const result=await syncMail(env,account.user_id);if(result.importedIds?.length&&ctx?.waitUntil)ctx.waitUntil(prepareNewMail(env,account.user_id,result.importedIds));
     // 后台预生成摘要和全文翻译，不阻塞同步响应。
     try{const briefs=preGenerateBriefs(env,account.user_id).catch(()=>{});if(ctx?.waitUntil)ctx.waitUntil(briefs);}catch{}
     if(result.importedIds?.length)try{const translations=preGenerateMailTranslations(env,account.user_id,result.importedIds).catch(()=>{});if(ctx?.waitUntil)ctx.waitUntil(translations);else await translations;}catch{}

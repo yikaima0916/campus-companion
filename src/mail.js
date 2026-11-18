@@ -140,7 +140,7 @@ export async function analyze(env,m,body,nameInfo={rules:[],preferred:''}) {
   const explicit=explicitDeadline(body);
   const cleanBody=stripMailHeaders(body);
   const short=extractiveSummary(m.subject,cleanBody.slice(0,900));
-  const fallback={sender,origin:'来源未确认',category,summary:applyNameAliases(short||cleanBody.slice(0,650),rules),action:assignment?'请核对作业要求与截止时间':'请查看原邮件确认是否需要处理',quality:'规则提取 · 请核对原文',assignment,title:String(m.subject||'课程作业').slice(0,200),due:assignment?explicit?.due??null:null,evidence:{title:String(m.subject||''),deadline:explicit?.evidence||''}};
+  const fallback={sender,origin:String(sender||'').replace(/\s*<[^>]*>\s*$/,'').replace(/^"|"$/g,'').trim()||'来源未确认',category,summary:applyNameAliases(short||cleanBody.slice(0,650),rules),action:assignment?'请核对作业要求与截止时间':'请查看原邮件确认是否需要处理',quality:'规则提取 · 请核对原文',assignment,title:String(m.subject||'课程作业').slice(0,200),due:assignment?explicit?.due??null:null,evidence:{title:String(m.subject||''),deadline:explicit?.evidence||''}};
   if(env.ENABLE_AI!=='true'||!env.AI)return fallback;
   try {
     const nameHint=nameHintFor(rules);
@@ -159,7 +159,7 @@ export async function analyze(env,m,body,nameInfo={rules:[],preferred:''}) {
     if(missing.length)summary+='\n金额：'+missing.join('、');
     let action=String(parsed.action||'').slice(0,600);
     if([1,2].includes(parsed.category)&&explicit&&!action.includes(explicit.evidence))action+='\n明确时间：'+explicit.evidence+'（香港时间；请核对原文）';
-    const claimedOrigin=String(parsed.origin||fallback.origin).slice(0,180);
+    const claimedOrigin=String(!parsed.origin||parsed.origin==='来源未确认'?fallback.origin:parsed.origin).slice(0,180);
     const origin=claimedOrigin==='来源未确认'||normalized.toLowerCase().includes(claimedOrigin.toLowerCase())?claimedOrigin:claimedOrigin+'（推断）';
     const polished=applyPreferredNameToFields({...fallback,origin,category:parsed.category,summary,action,quality:'自动提取 v3 · 请核对原文',assignment:isAssignment,title:String(parsed.title||m.subject).slice(0,200),due:isAssignment?(evidence&&Number.isFinite(due)?due:explicit?.due??null):null,evidence:{title:String(m.subject||''),deadline:evidence?parsed.deadline_evidence:explicit?.evidence||''}},rules);
     return polished;
@@ -244,7 +244,7 @@ export async function ingestShortcutEmail(env,data,userId) {
   await env.DB.prepare('INSERT OR IGNORE INTO messages(id,subject,received,sender,origin,category,summary,action,url,quality,user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(sourceId,subject,received,a.sender,a.origin,a.category,a.summary,a.action,'',a.quality,userId).run();
   await saveMailSuggestion(env,userId,sourceId,a);
   await setKV(env,'mail_status','iPhone 自动转交正常');await setKV(env,'mail_last',String(received));
-  return {duplicate:false,category:a.category,suggestion:a.assignment,task:false};
+  return {duplicate:false,id:sourceId,category:a.category,suggestion:a.assignment,task:false};
 }
 export async function schoolAddress(env,userId){
  const saved=await getKV(env,'school_email:'+userId);if(saved)return saved;

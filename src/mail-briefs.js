@@ -14,7 +14,9 @@ const hasSimplified=s=>[...String(s||'')].some(c=>SIMPLIFIED_CHARS.includes(c));
 export const cleanSubject=(s='')=>String(s).replace(/^(?:(?:\s*(?:fw|fwd|re|转发|轉寄|回复|回覆)\s*[:：])\s*)+/i,'').trim();
 export const parseBriefResponse=response=>typeof response==='object'&&response!==null?response:JSON.parse(String(response||'').replace(/^```(?:json)?\s*/,'').replace(/\s*```$/,''));
 const compact=s=>String(s||'').normalize('NFKC').replace(/[‘’]/g,"'").replace(/[“”]/g,'"').replace(/\s+/g,' ').trim();
-const key=async(user,locale,id,profile='')=>`${version}:${user}:${locale}:${await hash(id)}`+(profile?`:p${(await hash(profile)).slice(0,12)}`:'');
+// One saved brief per email and language, generated once and reused. Older profile-suffixed briefs are still read.
+const key=async(user,locale,id)=>`${version}:${user}:${locale}:${await hash(id)}`;
+const legacyKey=async(user,locale,id,profile)=>profile?`${await key(user,locale,id)}:p${(await hash(profile)).slice(0,12)}`:'';
 // Correct only when the email itself identifies Lingnan; never rewrite evidence.
 export function correctLingnanBrief(brief,locale,context=''){
  if(!brief||!String(locale).startsWith('zh'))return brief;
@@ -26,7 +28,8 @@ export function correctLingnanBrief(brief,locale,context=''){
 
 export async function readBrief(env,user,locale,id,sourceRow=null,about){try{
  if(about===undefined)about=await readerProfile(env,user);
- const brief=JSON.parse(await getKV(env,await key(user,locale,id,about))||'null');
+ let brief=JSON.parse(await getKV(env,await key(user,locale,id))||'null');
+ if(!brief&&about){const old=await legacyKey(user,locale,id,about);if(old)brief=JSON.parse(await getKV(env,old)||'null');}
  if(!brief)return null;
  if(locale==='en'&&!isEnglishBrief(brief))return null;
  if(!locale.startsWith('zh'))return brief;
@@ -68,7 +71,7 @@ export async function generateBrief(env,user,locale,id){
  if(!original)throw new Error('Email is unavailable');
  if(!original.originalAvailable&&!(locale.startsWith('zh')&&original.row?.summary))throw new Error('Email text is unavailable');
  const source=original.englishSubject+'\n'+stripMailHeaders(stripForwardedHeader(original.englishBody||''));
- const saveFallback=async()=>{const brief=fallbackBrief(original,locale);if(!brief)throw new Error('No readable email text for a quick view');await setKV(env,await key(user,locale,id,about),JSON.stringify(brief));return brief;};
+ const saveFallback=async()=>{const brief=fallbackBrief(original,locale);if(!brief)throw new Error('No readable email text for a quick view');await setKV(env,await key(user,locale,id),JSON.stringify(brief));return brief;};
  if(env.ENABLE_AI!=='true'||!env.AI)return saveFallback();
  const language=locale==='en'?'English':locale==='zh-TW'?'Traditional Chinese (繁體中文)':'Simplified Chinese (简体中文)';
  const scriptNote=locale==='zh-TW'
@@ -98,7 +101,7 @@ export async function generateBrief(env,user,locale,id){
    }catch(error){console.warn('mail-brief-translation-failed',String(error?.message||error).slice(0,120));return saveFallback();}
  }
  brief=correctLingnanBrief(brief,locale,source);
- await setKV(env,await key(user,locale,id,about),JSON.stringify(brief));return brief;
+ await setKV(env,await key(user,locale,id),JSON.stringify(brief));return brief;
 }
 
 // 后台预生成：同步新邮件后，自动为没有缓存摘要的邮件生成 AI 摘要
@@ -130,4 +133,13 @@ export async function preGenerateBriefs(env,userId,maxCount=5){
     console.warn('pregen-briefs-error', e.message?.slice(0,100));
     return {generated:0};
   }
+}
+
+// Prepare briefs as soon as new mail arrives so later views reuse the saved result.
+export async function prepareNewMail(env,user,ids=[],limit=8){
+ if(!ids.length)return;
+ const row=await env.DB.prepare('SELECT locale FROM users WHERE id=?').bind(user).first();
+ for(const id of ids.slice(-limit).reverse()){
+  try{await generateBrief(env,user,row?.locale||'zh-CN',id);}catch(error){console.warn('arrival-brief-failed',String(error?.message||error).slice(0,100));}
+ }
 }

@@ -74,7 +74,7 @@ test('authenticated iPhone mail handoff stores a suggestion without creating a t
   const send=key=>worker.fetch(new Request(origin+'/api/mail/shortcut',{method:'POST',headers:{Authorization:'Bearer '+key,'Content-Type':'application/json'},body:JSON.stringify(payload)}),env);
   assert.equal((await send('wrong-secret')).status,401);
   const imported=await send('test-shortcut-secret');assert.equal(imported.status,201);
-  assert.deepEqual(await imported.json(),{ok:true,duplicate:false,category:2,suggestion:true,task:false});
+  const importedBody=await imported.json();assert.match(importedBody.id,/^shortcut:/);delete importedBody.id;assert.deepEqual(importedBody,{ok:true,duplicate:false,category:2,suggestion:true,task:false});
   assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM messages').first()).n,1);
   assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM tasks').first()).n,0);
   const duplicate=await send('test-shortcut-secret');assert.equal((await duplicate.json()).duplicate,true);
