@@ -156,3 +156,27 @@
 .dg-card a.dg-btn{text-decoration:none}
 .dg-draft{display:block;margin-top:12px;font-size:.85rem;font-weight:700;color:var(--muted-text)}
 .dg-draft textarea{display:block;width:100%;margin-top:6px;font:inherit;font-weight:400;color:var(--ink);line-height:1.5}
+/* Long links and IDs in mail never widen the card */
+.dg-card [data-user-content],.dg-brief-points li,.dg-suggest-text{overflow-wrap:anywhere}
+/* AI suggestion: loading and reveal, updated in place without re-rendering the list */
+.dg-suggest-out:empty{display:none}
+.dg-suggest-out{margin-top:12px}
+.dg-ai-loading{display:flex;align-items:center;gap:10px;font-size:.88rem;font-weight:700;color:var(--accent-strong)}
+.dg-ai-orb{width:18px;height:18px;border-radius:50%;background:conic-gradient(from 0deg,var(--accent-strong),#7fd1bd,#b9a7e8,var(--accent-strong));-webkit-mask:radial-gradient(circle,transparent 5px,#000 6px);mask:radial-gradient(circle,transparent 5px,#000 6px);animation:dg-spin 1s linear infinite}
+.dg-ai-dots{display:inline-flex;gap:3px}
+.dg-ai-dots i{width:4px;height:4px;border-radius:50%;background:currentColor;opacity:.3;animation:dg-dot 1.2s ease-in-out infinite}
+.dg-ai-dots i:nth-child(2){animation-delay:.15s}.dg-ai-dots i:nth-child(3){animation-delay:.3s}
+.dg-skel.is-ai{margin-top:12px}
+.dg-skel.is-ai span{background:linear-gradient(90deg,var(--surface-2) 0%,color-mix(in srgb,var(--accent-soft) 80%,#fff) 40%,var(--surface-2) 80%);background-size:300% 100%;animation:dg-shimmer 1.4s ease-in-out infinite}
+.dg-reveal{animation:dg-reveal .38s cubic-bezier(.22,1,.36,1) both}
+.dg-reveal li{animation:dg-reveal .38s cubic-bezier(.22,1,.36,1) both;animation-delay:calc(var(--n,0) * 60ms)}
+.dg-draft textarea{resize:vertical;min-height:120px;border-radius:14px;padding:12px 14px;border:1px solid var(--surface-3);background:var(--surface-1,#fff);transition:border-color .2s,box-shadow .2s}
+.dg-draft textarea:focus{outline:0;border-color:var(--accent-strong);box-shadow:0 0 0 3px var(--accent-soft)}
+.dg-card .dg-btn[aria-busy="true"]{position:relative;color:transparent}
+.dg-card .dg-btn[aria-busy="true"]::after{content:"";position:absolute;inset:0;margin:auto;width:16px;height:16px;border-radius:50%;border:2px solid currentColor;border-color:#fff #fff transparent transparent;animation:dg-spin .8s linear infinite}
+.dg-card .dg-btn:not(.primary)[aria-busy="true"]::after{border-color:var(--ink) var(--ink) transparent transparent}
+@keyframes dg-spin{to{transform:rotate(360deg)}}
+@keyframes dg-dot{0%,80%,100%{opacity:.25;transform:translateY(0)}40%{opacity:1;transform:translateY(-3px)}}
+@keyframes dg-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+@keyframes dg-reveal{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.dg-ai-orb,.dg-ai-dots i,.dg-skel.is-ai span,.dg-reveal,.dg-reveal li,.dg-card .dg-btn[aria-busy="true"]::after{animation:none}}

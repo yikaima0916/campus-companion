@@ -192,7 +192,7 @@ main{padding:0 4.5% 80px}
 .avatar-preview{border:0;border-radius:50%}
 
 /* (c) stacked cards (日报): only the edges of the cards behind peek out until you open the stack */
-.card-stack{display:grid;isolation:isolate} /* keeps the card z-index inside the stack */
+.card-stack{display:grid;grid-template-columns:minmax(0,1fr);isolation:isolate} /* keeps the card z-index inside the stack */
 .card-stack .digest-card{position:relative;z-index:calc(50 - var(--i,0));margin:0 0 16px;transform-origin:50% 0;
   transition:margin .5s var(--spring),transform .5s var(--spring),opacity .3s,max-height .5s var(--ease-out);transition-delay:calc(var(--i,0) * 50ms);max-height:none}
 .card-stack.is-collapsed{cursor:pointer}

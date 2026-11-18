@@ -606,20 +606,20 @@ function digestSuggestion(it,brief,key){
   const url=kinds.includes('register')?briefUrls(brief)[0]:'';
   const text=kinds.includes('reply')?local('这封邮件需要你回复。AI 可以先起草，你修改后再发送。','這封郵件需要你回覆。AI 可以先起草，你修改後再發送。','This email asks for a reply. AI can draft one for you to edit and send.'):local('这封邮件可以报名。先看清要求，再决定要不要参加。','這封郵件可以報名。先看清要求，再決定要不要參加。','You can register for this. Check the details, then decide.');
   const buttons=[];
-  if(kinds.includes('reply'))buttons.push(`<button type="button" class="dg-btn primary" data-dg-assist="${key}" data-mode="reply" ${assistLoading.has(it.id+':reply')?'disabled':''}>${esc(local('AI 帮我写回复','AI 幫我寫回覆','Draft a reply'))}</button>`);
+  if(kinds.includes('reply'))buttons.push(`<button type="button" class="dg-btn primary" data-dg-assist="${key}" data-mode="reply" ${assistLoading.has(it.id+':reply')?'disabled aria-busy="true"':''}>${esc(local('AI 帮我写回复','AI 幫我寫回覆','Draft a reply'))}</button>`);
   if(kinds.includes('register')){
     if(url)buttons.push(`<a class="dg-btn${kinds.includes('reply')?'':' primary'}" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(local('打开报名链接','打開報名連結','Open registration'))}<span aria-hidden="true"> ↗</span></a>`);
-    buttons.push(`<button type="button" class="dg-btn" data-dg-assist="${key}" data-mode="register" ${assistLoading.has(it.id+':register')?'disabled':''}>${esc(local('AI 帮我看报名要求','AI 幫我看報名要求','Check what I need'))}</button>`);
+    buttons.push(`<button type="button" class="dg-btn" data-dg-assist="${key}" data-mode="register" ${assistLoading.has(it.id+':register')?'disabled aria-busy="true"':''}>${esc(local('AI 帮我看报名要求','AI 幫我看報名要求','Check what I need'))}</button>`);
   }
   let out='';
   for(const mode of ['reply','register']){
-    if(assistLoading.has(it.id+':'+mode))out+=`<p class="dg-note">${esc(local('AI 正在准备…','AI 正在準備…','AI is preparing…'))}</p>`;
+    if(assistLoading.has(it.id+':'+mode)){out+=`<div class="dg-ai-loading" role="status"><span class="dg-ai-orb" aria-hidden="true"></span><span>${esc(mode==='reply'?local('AI 正在起草回复','AI 正在起草回覆','AI is drafting a reply'):local('AI 正在阅读报名要求','AI 正在閱讀報名要求','AI is reading the requirements'))}</span><span class="dg-ai-dots" aria-hidden="true"><i></i><i></i><i></i></span></div><div class="dg-skel is-ai" aria-hidden="true"><span></span><span></span><span></span></div>`;continue;}
     const r=assistResults.get(it.id+':'+mode);if(!r)continue;
-    if(r.error){out+=`<p class="dg-note is-error">${esc(r.error)}</p>`;continue;}
-    if(mode==='reply')out+=`<label class="dg-draft">${esc(local('回复草稿（可修改）','回覆草稿（可修改）','Reply draft (editable)'))}<textarea rows="7" data-dg-draft="${key}">${esc(r.text)}</textarea></label><div class="dg-actions"><button type="button" class="dg-btn" data-dg-copy="${key}">${esc(local('复制','複製','Copy'))}</button>${r.to?`<button type="button" class="dg-btn" data-dg-mailto="${key}" data-to="${esc(r.to)}" data-subject="${esc(r.subject||'')}">${esc(local('用邮箱打开','用郵箱打開','Open in mail app'))}</button>`:''}</div>`;
-    else out+=`<ul class="dg-brief-points" data-user-content>${r.text.split('\n').map(l=>l.replace(/^\s*[-*•]\s*/,'').trim()).filter(Boolean).map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`;
+    if(r.error){out+=`<p class="dg-note is-error dg-reveal">${esc(r.error)}</p>`;continue;}
+    if(mode==='reply')out+=`<div class="dg-reveal"><label class="dg-draft">${esc(local('回复草稿（可修改）','回覆草稿（可修改）','Reply draft (editable)'))}<textarea rows="7" data-dg-draft="${key}">${r.typed===false?'':esc(r.text)}</textarea></label><div class="dg-actions"><button type="button" class="dg-btn" data-dg-copy="${key}">${esc(local('复制','複製','Copy'))}</button>${r.to?`<button type="button" class="dg-btn" data-dg-mailto="${key}" data-to="${esc(r.to)}" data-subject="${esc(r.subject||'')}">${esc(local('用邮箱打开','用郵箱打開','Open in mail app'))}</button>`:''}</div></div>`;
+    else out+=`<ul class="dg-brief-points dg-reveal" data-user-content>${r.text.split('\n').map(l=>l.replace(/^\s*[-*•]\s*/,'').trim()).filter(Boolean).map((l,n)=>`<li style="--n:${n}">${esc(l)}</li>`).join('')}</ul>`;
   }
-  return `<div class="dg-suggest"><p class="dg-brief-label is-action">${esc(local('AI 建议','AI 建議','AI suggestion'))}</p><p class="dg-suggest-text">${esc(text)}</p><div class="dg-actions">${buttons.join('')}</div>${out}</div>`;
+  return `<div class="dg-suggest" data-dg-suggest="${key}"><p class="dg-brief-label is-action">${esc(local('AI 建议','AI 建議','AI suggestion'))}</p><p class="dg-suggest-text">${esc(text)}</p><div class="dg-actions">${buttons.join('')}</div><div class="dg-suggest-out" aria-live="polite">${out}</div></div>`;
 }
 function digestBody(r,key){
   const it=r.item,brief=locale==='en'&&!englishBriefIsUsable(it.brief)?null:it.brief;
@@ -726,6 +726,7 @@ function bindDigestEvents(){
         const open=!row.classList.contains('open');
         row.classList.toggle('open',open);
         head.setAttribute('aria-expanded',String(open));
+        {const rid=digestViews[Number(row.dataset.dgRow.split(':')[0])]?.rows[Number(row.dataset.dgRow.split(':')[1])]?.item.id;if(rid)open?digestOpen.add(rid):digestOpen.delete(rid);}
         syncToggleAll(row.closest('.dg-card'));
       }catch(e){console.warn('digest row click failed',e);}
       return;
@@ -766,12 +767,29 @@ function bindDigestEvents(){
     }
     const assist=find('[data-dg-assist]');
     if(assist){
-      const {r}=rowOf(assist.dataset.dgAssist),id=r?.item.id,mode=assist.dataset.mode;if(!id)return;
+      const akey=assist.dataset.dgAssist,{r}=rowOf(akey),id=r?.item.id,mode=assist.dataset.mode;if(!id)return;
       const k=id+':'+mode;if(assistLoading.has(k))return;
-      assistLoading.add(k);assistResults.delete(k);renderDigests(false);
-      try{assistResults.set(k,await api('messages/'+encodeURIComponent(id)+'/assist',{method:'POST',body:{mode,locale}}));}
-      catch(error){assistResults.set(k,{error:error.message});}
-      finally{assistLoading.delete(k);digestOpen.add(id);renderDigests(false);}
+      digestOpen.add(id);
+      const swap=()=>{const box=root.querySelector(`[data-dg-suggest="${akey}"]`),brief=r.item.brief;if(!box||!brief)return null;const holder=document.createElement('div');holder.innerHTML=digestSuggestion(r.item,brief,akey);const next=holder.firstElementChild;if(next)box.replaceWith(next);return next;};
+      assistLoading.add(k);assistResults.delete(k);swap();
+      let result;
+      try{result=await api('messages/'+encodeURIComponent(id)+'/assist',{method:'POST',body:{mode,locale}});}
+      catch(error){result={error:error.message};}
+      assistLoading.delete(k);
+      const typing=mode==='reply'&&!result.error&&motionOk();
+      assistResults.set(k,typing?{...result,typed:false}:result);
+      const box=swap();
+      const area=box?.querySelector('[data-dg-draft]');
+      if(area){
+        const full=result.text||'';
+        const fit=()=>{area.style.height='auto';area.style.height=Math.min(area.scrollHeight+2,420)+'px';};
+        if(typing){
+          // Type the draft in over about 0.7 s, like a live AI reply, then keep it editable.
+          const t0=performance.now(),dur=Math.min(900,300+full.length*2);
+          const step=now=>{const p=Math.min(1,(now-t0)/dur),n=Math.round(full.length*(1-Math.pow(1-p,2)));area.value=full.slice(0,n);fit();if(p<1)requestAnimationFrame(step);else{assistResults.set(k,result);area.value=full;fit();}};
+          requestAnimationFrame(step);
+        }else fit();
+      }
       return;
     }
     const copy=find('[data-dg-copy]');
