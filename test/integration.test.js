@@ -279,7 +279,7 @@ test('mail reminder preferences are saved separately for each account',async()=>
   const env={DB:database()},origin='https://campus.example',token=random();
   await env.DB.prepare("INSERT INTO users(id,email,password_hash,created) VALUES('prefs','prefs@example.com','unused',0)").run();
   await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),Date.now()+3600000,'prefs').run();
-  const preferences={focusTerms:['scholarship','SOC 210'],daily:{enabled:true,time:'18:30'},late:{enabled:false,time:'00:30'},translateZh:true,englishSummary:false};
+  const preferences={focusTerms:['scholarship','SOC 210'],profile:'Year 2 Data Science',daily:{enabled:true,time:'18:30'},late:{enabled:false,time:'00:30'},translateZh:true,englishSummary:false};
   const response=await worker.fetch(new Request(origin+'/api/profile',{method:'PATCH',headers:{Origin:origin,Cookie:'campus_session='+token,'Content-Type':'application/json'},body:JSON.stringify({mailPreferences:preferences})}),env);
   assert.equal(response.status,200);assert.deepEqual((await response.json()).mailPreferences,preferences);
   const profile=await worker.fetch(new Request(origin+'/api/profile',{headers:{Cookie:'campus_session='+token}}),env);

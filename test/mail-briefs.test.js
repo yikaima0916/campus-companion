@@ -15,7 +15,7 @@ test('brief cache is scoped to account and language',async()=>{
  await attachBriefs(env,'alice','en',[{id:'same',subject:'FW: update'}]);
  await attachBriefs(env,'bob','en',[{id:'same',subject:'FW: update'}]);
  await attachBriefs(env,'alice','zh-CN',[{id:'same',subject:'FW: update'}]);
- assert.equal(new Set(keys).size,3);
+ assert.equal(new Set(keys.filter(k=>String(k).startsWith('brief-'))).size,3);
 });
 
 test('AI responses support structured objects and fenced JSON',()=>{

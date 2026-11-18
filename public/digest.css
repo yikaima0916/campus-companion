@@ -147,3 +147,12 @@
   .dg-actions .dg-btn{flex:1 1 auto}
 }
 [data-theme="dark"] .dg-brief-label.is-action{background:#a83e2d;color:#fff}
+/* AI suggested next step and "for you" line */
+.dg-foryou{margin:8px 0 0;font-size:.92rem;line-height:1.55}
+.dg-foryou b{display:inline-block;margin-right:6px;padding:2px 9px;border-radius:var(--pill);background:var(--accent-soft);color:var(--accent-strong);font-size:.72rem;font-weight:800;letter-spacing:.04em}
+.dg-suggest{margin-top:14px;padding:14px 16px;border-radius:16px;background:var(--surface-3);border-left:4px solid var(--accent-strong)}
+.dg-suggest .dg-suggest-text{margin:4px 0 0;font-size:.93rem;line-height:1.55}
+.dg-suggest .dg-actions{margin-top:12px}
+.dg-card a.dg-btn{text-decoration:none}
+.dg-draft{display:block;margin-top:12px;font-size:.85rem;font-weight:700;color:var(--muted-text)}
+.dg-draft textarea{display:block;width:100%;margin-top:6px;font:inherit;font-weight:400;color:var(--ink);line-height:1.5}

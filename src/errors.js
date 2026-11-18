@@ -44,6 +44,7 @@ const MESSAGES={
   '任务已更新，请刷新':['任務已更新，請重新整理','Task was updated. Refresh.'],
   '只有已完成任务可以删除':['只有已完成任務可以刪除','Only completed tasks can be deleted'],
   '邮件不存在':['郵件不存在','Email not found'],
+'AI 暂时不可用，请稍后再试':['AI 暫時不可用，請稍後再試','AI is unavailable right now. Please try again later.'],
   '请输入有效的 Outlook 邮箱':['請輸入有效的 Outlook 電郵','Enter a valid Outlook email'],
   '尚未连接 Outlook':['尚未連接 Outlook','Outlook is not connected'],
   '通知订阅无效':['通知訂閱無效','Invalid notification subscription'],

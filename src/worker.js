@@ -1,5 +1,6 @@
 import { schoolAddress } from './mail.js';
 import {attachBriefs,generateBrief,readBrief,preGenerateBriefs} from './mail-briefs.js';
+import {assistMail,normalizeProfile} from './mail-assist.js';
 import { meetingTask,wording } from './display.js';
 import { serverMessage,normalizeLocale } from './errors.js';
 import { buildAliasRules,normalizeName,suggestAliasVariants } from './names.js';
@@ -23,9 +24,9 @@ async function nameAliasRules(env,userId,preferredZhName=''){
 const validEmail=value=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)&&value.length<=254;
 const defaultReminder={presets:[],offsets:[4320,1440,120,30],repeat:1440,maxCount:0,start:'08:00',end:'23:00',days:[1,2,3,4,5,6,0],push:true,email:false};
 const parseReminder=value=>{try{return {...defaultReminder,...JSON.parse(value||'{}')}}catch{return defaultReminder}};
-const defaultMailPreferences={focusTerms:[],daily:{enabled:true,time:'20:00'},late:{enabled:true,time:'00:00'},translateZh:true,englishSummary:false};
+const defaultMailPreferences={focusTerms:[],profile:'',daily:{enabled:true,time:'20:00'},late:{enabled:true,time:'00:00'},translateZh:true,englishSummary:false};
 const validTime=value=>/^([01]\d|2[0-3]):[0-5]\d$/.test(String(value||''));
-const parseMailPreferences=value=>{try{const raw=typeof value==='string'?JSON.parse(value||'{}'):(value||{}),focusTerms=(Array.isArray(raw.focusTerms)?raw.focusTerms:[]).map(x=>String(x).trim()).filter(x=>x.length>0&&x.length<=80).filter((x,index,list)=>list.findIndex(other=>other.toLowerCase()===x.toLowerCase())===index).slice(0,30);return {focusTerms,daily:{enabled:raw.daily?.enabled!==false,time:validTime(raw.daily?.time)?raw.daily.time:'20:00'},late:{enabled:raw.late?.enabled!==false,time:validTime(raw.late?.time)?raw.late.time:'00:00'},translateZh:raw.translateZh!==false,englishSummary:raw.englishSummary===true};}catch{return structuredClone(defaultMailPreferences)}};
+const parseMailPreferences=value=>{try{const raw=typeof value==='string'?JSON.parse(value||'{}'):(value||{}),focusTerms=(Array.isArray(raw.focusTerms)?raw.focusTerms:[]).map(x=>String(x).trim()).filter(x=>x.length>0&&x.length<=80).filter((x,index,list)=>list.findIndex(other=>other.toLowerCase()===x.toLowerCase())===index).slice(0,30);return {focusTerms,profile:normalizeProfile(raw.profile),daily:{enabled:raw.daily?.enabled!==false,time:validTime(raw.daily?.time)?raw.daily.time:'20:00'},late:{enabled:raw.late?.enabled!==false,time:validTime(raw.late?.time)?raw.late.time:'00:00'},translateZh:raw.translateZh!==false,englishSummary:raw.englishSummary===true};}catch{return structuredClone(defaultMailPreferences)}};
 function tabCookieName(request){const tab=request.headers.get('X-Session-Tab')||'';return /^[a-f0-9-]{36}$/.test(tab)?'campus_session_'+tab:'campus_session';}
 async function session(request,env){const cookies=request.headers.get('Cookie')||'',name=tabCookieName(request);let cookie=cookies.split(';').map(v=>v.trim()).find(v=>v.startsWith(name+'='))?.slice(name.length+1);if(!cookie&&new URL(request.url).pathname==='/api/session/tab')cookie=cookies.match(/(?:^|; )campus_session=([^;]+)/)?.[1];if(!cookie)return null;return env.DB.prepare('SELECT s.id,s.user_id,u.email,u.locale FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.id=? AND s.expires>?').bind(await hash(cookie),Date.now()).first();}
 async function startSession(env,user,url,request){const token=random(),expires=Date.now()+30*86400000;await env.DB.prepare('INSERT INTO sessions(id,expires,user_id) VALUES(?,?,?)').bind(await hash(token),expires,user.id).run();const headers=new Headers({'Content-Type':'application/json'}),suffix=`; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${url.protocol==='https:'?'; Secure':''}`;headers.append('Set-Cookie',`campus_session=${token}${suffix}`);const name=tabCookieName(request);if(name!=='campus_session')headers.append('Set-Cookie',`${name}=${token}${suffix}`);return new Response('{}',{headers});}
@@ -256,6 +257,14 @@ async function routes(request,env,ctx){
       try{results.push({id,brief:await generateBrief(env,account.user_id,profile?.locale||'zh-CN',id)})}catch(error){console.warn('brief-failure',error.name, /Ungrounded|supported|language|JSON|Original|AI summary/.test(error.message)?error.message.slice(0,100):'generation failed');results.push({id,error:true})}
     }
     return json({results});
+  }
+  const assistId=path.match(/^\/api\/messages\/(.+)\/assist$/)?.[1];
+  if(assistId&&method==='POST'){
+    const data=await body(request);
+    const profile=await env.DB.prepare('SELECT locale FROM users WHERE id=?').bind(account.user_id).first();
+    const result=await assistMail(env,account.user_id,normalizeLocale(data.locale||profile?.locale||'zh-CN'),decodeURIComponent(assistId),String(data.mode||''));
+    if(result.error)return json({error:result.error==='ai-unavailable'?serverMessage('AI 暂时不可用，请稍后再试',uiLocale):result.error==='not-found'?serverMessage('邮件不存在',uiLocale):serverMessage('操作无效',uiLocale),code:result.error},result.status);
+    return json(result);
   }
   const messageId=path.match(/^\/api\/messages\/(.+)$/)?.[1];
   if(messageId&&method==='GET'){

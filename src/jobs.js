@@ -85,9 +85,10 @@ async function oneDigest(env,now,w,userId,prefs,locale='zh-CN') {
   if(!forwarding){const since=Date.parse(connection?.since||'');if(!Number.isFinite(since)||since<w.end)return;}
   const {results}=await env.DB.prepare('SELECT id,subject,received,sender,origin,category,summary,action FROM messages WHERE user_id=? AND received>=? AND received<? ORDER BY category,received').bind(userId,w.start,w.end).all();
   const preferred=String((await env.DB.prepare('SELECT preferred_zh_name FROM users WHERE id=?').bind(userId).first())?.preferred_zh_name||'').trim();
-  const visible=results.filter(m=>!prefs.focusTerms.length||prefs.focusTerms.some(term=>`${m.subject} ${m.sender} ${m.origin} ${m.summary} ${m.action}`.toLowerCase().includes(term.toLowerCase())));
+  // Interests no longer hide mail from the digest; every school email stays visible.
+  const visible=results;
   if(w.late&&!visible.length){await setKV(env,digestKey,'quiet');return;}
-  const emptyText=prefs.focusTerms.length?wording(locale,'在这个时段没有匹配你的关注词的学校邮件。','在這個時段沒有符合你關注詞的學校郵件。','No school mail matching your focus terms in this window.'):wording(locale,'这个时段没有需要总结的学校邮件。','這個時段沒有需要總結的學校郵件。','No school mail to summarize in this window.');
+  const emptyText=wording(locale,'这个时段没有需要总结的学校邮件。','這個時段沒有需要總結的學校郵件。','No school mail to summarize in this window.');
   const items=visible.map(m=>shapeDigestItem(applyPreferredNameToFields(m,preferred)));
   const title=w.date+(w.late?wording(locale,' 晚间补充',' 晚間補充',' Evening digest'):wording(locale,' 学校邮件日报',' 學校郵件日報',' School mail digest'));
   const record=shapeDigestRecord({title,created:now,items,emptyText});

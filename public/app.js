@@ -51,9 +51,9 @@ Object.assign(I18N['zh-CN'],{outlookMissing:'当前缺少：',outlookSetupHelp:'
 Object.assign(I18N['zh-TW'],{outlookMissing:'目前缺少：',outlookSetupHelp:'連接器程式已就緒；部署者需依 docs/OUTLOOK_SETUP.md 註冊 Microsoft 應用程式並設定這些變數。'});
 Object.assign(I18N.en,{outlookMissing:'Missing configuration:',outlookSetupHelp:'The connector is implemented. The deployer must register a Microsoft app and configure these values using docs/OUTLOOK_SETUP.md.'});
 
-Object.assign(I18N['zh-CN'],{digests:'日报与提醒',digestEyebrow:'按你的关注词筛选',focusTerms:'关注词或主题',focusTermsHelp:'输入你关心的关键词，每行一个。留空则不筛选。',digestHistoryEmpty:'尚未生成日报或晚间补充',digestHistoryHelp:'到设置中开启日报或晚间补充后，发送过的总结会保留在这里。'});
-Object.assign(I18N['zh-TW'],{digests:'日報與提醒',digestEyebrow:'依你的關注詞篩選',focusTerms:'關注詞或主題',focusTermsHelp:'輸入你關心的關鍵詞，每行一個。留空則不篩選。',digestHistoryEmpty:'尚未產生日報或晚間補充',digestHistoryHelp:'到設定中開啟日報或晚間補充後，已發送的總結會保留在這裡。'});
-Object.assign(I18N.en,{digests:'Daily digests & reminders',digestEyebrow:'Filtered by your focus terms',focusTerms:'Focus terms or topics',focusTermsHelp:'Add one keyword per line. Leave blank to include all imported mail.',digestHistoryEmpty:'No daily digests or evening additions yet',digestHistoryHelp:'Turn on a daily digest or evening addition in Settings. Sent summaries will appear here.'});
+Object.assign(I18N['zh-CN'],{digests:'日报与提醒',digestEyebrow:'按需要处理的程度整理',focusTerms:'关于我',focusTermsHelp:'例如：数据科学二年级，对 AI 比赛和交换感兴趣',digestHistoryEmpty:'尚未生成日报或晚间补充',digestHistoryHelp:'到设置中开启日报或晚间补充后，发送过的总结会保留在这里。'});
+Object.assign(I18N['zh-TW'],{digests:'日報與提醒',digestEyebrow:'按需要處理的程度整理',focusTerms:'關於我',focusTermsHelp:'例如：數據科學二年級，對 AI 比賽和交換有興趣',digestHistoryEmpty:'尚未產生日報或晚間補充',digestHistoryHelp:'到設定中開啟日報或晚間補充後，已發送的總結會保留在這裡。'});
+Object.assign(I18N.en,{digests:'Daily digests & reminders',digestEyebrow:'Sorted by what needs you',focusTerms:'About me',focusTermsHelp:'e.g. Year 2 Data Science, interested in AI competitions and exchange',digestHistoryEmpty:'No daily digests or evening additions yet',digestHistoryHelp:'Turn on a daily digest or evening addition in Settings. Sent summaries will appear here.'});
 Object.assign(I18N['zh-CN'],{preferredZhName:'偏好中文译名',preferredZhNameHelp:'用于邮件摘要与翻译中的你的中文姓名。留空则沿用自动翻译。',mailTranslateZh:'提供邮件中文翻译',mailEnglishSummary:'提供英文摘要',mailTranslateHelp:'按需选择邮件的阅读语言。',mailDetail:'邮件详情',mailChinese:'中文翻译',mailEnglish:'英文原文',openMail:'查看邮件',loadMoreMail:'加载更多邮件',noDigestItems:'这份日报没有可展示的邮件条目。'});
 Object.assign(I18N['zh-TW'],{preferredZhName:'偏好中文譯名',preferredZhNameHelp:'用於郵件摘要與翻譯中的你的中文姓名。留空則沿用自動翻譯。',mailTranslateZh:'提供郵件中文翻譯',mailEnglishSummary:'提供英文摘要',mailTranslateHelp:'按需要選擇郵件的閱讀語言。',mailDetail:'郵件詳情',mailChinese:'中文翻譯',mailEnglish:'英文原文',openMail:'查看郵件',loadMoreMail:'載入更多郵件',noDigestItems:'這份日報沒有可展示的郵件條目。'});
 Object.assign(I18N.en,{preferredZhName:'Preferred Chinese name',preferredZhNameHelp:'Used when digests mention you in Chinese.',mailTranslateZh:'Chinese translation for mail',mailEnglishSummary:'English summary',mailTranslateHelp:'Choose your preferred reading options.',mailDetail:'Mail detail',mailChinese:'Chinese',mailEnglish:'English original',openMail:'Open mail',loadMoreMail:'Load more mail',noDigestItems:'No mail items in this digest.'});
@@ -584,11 +584,44 @@ function digestLede(o){
   if(counts.upcoming)return local(`没有需要马上处理的邮件；有 ${counts.upcoming} 项日期安排可以留意。`,`沒有需要即時處理的郵件；有 ${counts.upcoming} 項日期安排可以留意。`,`Nothing urgent. ${counts.upcoming} dated ${counts.upcoming===1?'item is':'items are'} worth keeping in mind.`);
   return local('这个时段只有资讯类邮件，没有需要处理的事项。','這個時段只有資訊類郵件，沒有需要處理的事項。','Only informational mail this time — nothing to act on.');
 }
+// AI suggested next step for one email, built from the AI brief's requests. The student
+// always chooses: links open the original form, drafts are only copied or opened in mail.
+const assistResults=new Map(),assistLoading=new Set();
+const briefUrls=b=>[...new Set([...(b.actions||[]),...(b.points||[])].flatMap(p=>`${p.text||''} ${p.evidence||''}`.match(/https?:\/\/[^\s<>"'）)\]]+/g)||[]).map(u=>u.replace(/[.,;:。，]+$/,'')))];
+function suggestionKinds(b){
+  const acts=(b?.actions||[]).map(p=>`${p.text||''} ${p.evidence||''}`).join(' ');
+  const kinds=[];
+  if(/\b(?:reply|respond|RSVP|let (?:us|me) know|confirm (?:your|whether|if)|email (?:us|me) back)\b|回覆|回复|回信|告知/i.test(acts))kinds.push('reply');
+  if(/\b(?:regist(?:er|ration)|sign[ -]?up|enrol(?:l|ment)?|apply|application)\b|報名|报名|登記|登记|申請|申请/i.test(acts))kinds.push('register');
+  return kinds;
+}
+function digestSuggestion(it,brief,key){
+  if(!it.id||it.ignored||brief.fallback)return '';
+  const kinds=suggestionKinds(brief);if(!kinds.length)return '';
+  const url=kinds.includes('register')?briefUrls(brief)[0]:'';
+  const text=kinds.includes('reply')?local('这封邮件需要你回复。AI 可以先起草，你修改后再发送。','這封郵件需要你回覆。AI 可以先起草，你修改後再發送。','This email asks for a reply. AI can draft one for you to edit and send.'):local('这封邮件可以报名。先看清要求，再决定要不要参加。','這封郵件可以報名。先看清要求，再決定要不要參加。','You can register for this. Check the details, then decide.');
+  const buttons=[];
+  if(kinds.includes('reply'))buttons.push(`<button type="button" class="dg-btn primary" data-dg-assist="${key}" data-mode="reply" ${assistLoading.has(it.id+':reply')?'disabled':''}>${esc(local('AI 帮我写回复','AI 幫我寫回覆','Draft a reply'))}</button>`);
+  if(kinds.includes('register')){
+    if(url)buttons.push(`<a class="dg-btn${kinds.includes('reply')?'':' primary'}" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(local('打开报名链接','打開報名連結','Open registration'))}<span aria-hidden="true"> ↗</span></a>`);
+    buttons.push(`<button type="button" class="dg-btn" data-dg-assist="${key}" data-mode="register" ${assistLoading.has(it.id+':register')?'disabled':''}>${esc(local('AI 帮我看报名要求','AI 幫我看報名要求','Check what I need'))}</button>`);
+  }
+  let out='';
+  for(const mode of ['reply','register']){
+    if(assistLoading.has(it.id+':'+mode))out+=`<p class="dg-note">${esc(local('AI 正在准备…','AI 正在準備…','AI is preparing…'))}</p>`;
+    const r=assistResults.get(it.id+':'+mode);if(!r)continue;
+    if(r.error){out+=`<p class="dg-note is-error">${esc(r.error)}</p>`;continue;}
+    if(mode==='reply')out+=`<label class="dg-draft">${esc(local('回复草稿（可修改）','回覆草稿（可修改）','Reply draft (editable)'))}<textarea rows="7" data-dg-draft="${key}">${esc(r.text)}</textarea></label><div class="dg-actions"><button type="button" class="dg-btn" data-dg-copy="${key}">${esc(local('复制','複製','Copy'))}</button>${r.to?`<button type="button" class="dg-btn" data-dg-mailto="${key}" data-to="${esc(r.to)}" data-subject="${esc(r.subject||'')}">${esc(local('用邮箱打开','用郵箱打開','Open in mail app'))}</button>`:''}</div>`;
+    else out+=`<ul class="dg-brief-points" data-user-content>${r.text.split('\n').map(l=>l.replace(/^\s*[-*•]\s*/,'').trim()).filter(Boolean).map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`;
+  }
+  return `<div class="dg-suggest"><p class="dg-brief-label is-action">${esc(local('AI 建议','AI 建議','AI suggestion'))}</p><p class="dg-suggest-text">${esc(text)}</p><div class="dg-actions">${buttons.join('')}</div>${out}</div>`;
+}
 function digestBody(r,key){
   const it=r.item,brief=locale==='en'&&!englishBriefIsUsable(it.brief)?null:it.brief;
   const meta=[digestText(brief?.topic||(it.category?tx(categoryKey(it.category)):''),'Topic unavailable'),digestText(it.origin||it.sender,'Sender unavailable'),it.received?fmt(it.received):''].filter(Boolean);
   let html=meta.length?`<p class="dg-meta" data-user-content>${esc(meta.join(' · '))}</p>`:'';
-  if(brief)html+=digestBriefContent({...it,brief});
+  if(brief?.forYou)html+=`<p class="dg-foryou"><b>${esc(local('与你相关','與你相關','For you'))}</b> <span data-user-content>${esc(brief.forYou)}</span></p>`;
+  if(brief)html+=digestBriefContent({...it,brief})+digestSuggestion(it,brief,key);
   else if(it.briefLoading)html+=`<div class="dg-skel" role="status" aria-label="${esc(local('正在从原文整理要点','正在從原文整理重點','Reading the original email'))}"><span></span><span></span><span></span></div><p class="dg-note">${esc(local('正在从原文整理要点…','正在從原文整理重點…','Reading the original email…'))}</p>`;
   else{
     // 没有 AI 摘要时，先展示已有的速览（extractive summary），而不是一直"正在整理"。
@@ -674,6 +707,7 @@ function bindDigestEvents(){
   if(digestBound)return;digestBound=true;
   const root=$('#digest-list');
   addEventListener('resize',moveIndicators);
+  root.addEventListener('input',e=>{const area=e.target.closest?.('[data-dg-draft]');if(!area)return;const [di,n]=area.dataset.dgDraft.split(':').map(Number),id=digestViews[di]?.rows[n]?.item.id,r=id&&assistResults.get(id+':reply');if(r)r.text=area.value;});
   root.addEventListener('click',()=>{const t=root.querySelector('.stack-toggle');if(t)digestStackOpen=t.getAttribute('aria-expanded')==='true';});
   root.addEventListener('click',async e=>{
     if(e.target.closest('.card-stack.is-collapsed'))return; // first click only unfolds the stack
@@ -725,6 +759,20 @@ function bindDigestEvents(){
       }catch(error){ignore.disabled=false;$('#global-error').textContent=error.message;}
       return;
     }
+    const assist=find('[data-dg-assist]');
+    if(assist){
+      const {r}=rowOf(assist.dataset.dgAssist),id=r?.item.id,mode=assist.dataset.mode;if(!id)return;
+      const k=id+':'+mode;if(assistLoading.has(k))return;
+      assistLoading.add(k);assistResults.delete(k);renderDigests(false);
+      try{assistResults.set(k,await api('messages/'+encodeURIComponent(id)+'/assist',{method:'POST',body:{mode,locale}}));}
+      catch(error){assistResults.set(k,{error:error.message});}
+      finally{assistLoading.delete(k);digestOpen.add(id);renderDigests(false);}
+      return;
+    }
+    const copy=find('[data-dg-copy]');
+    if(copy){const area=root.querySelector(`[data-dg-draft="${copy.dataset.dgCopy}"]`);if(area){try{await navigator.clipboard.writeText(area.value);toast(local('已复制','已複製','Copied'));}catch{area.select();}}return;}
+    const mailto=find('[data-dg-mailto]');
+    if(mailto){const area=root.querySelector(`[data-dg-draft="${mailto.dataset.dgMailto}"]`);location.href=`mailto:${encodeURIComponent(mailto.dataset.to)}?subject=${encodeURIComponent(mailto.dataset.subject||'')}&body=${encodeURIComponent(area?.value||'')}`;return;}
     const addTask=find('[data-dg-add-task]');
     if(addTask){const {r}=rowOf(addTask.dataset.dgAddTask);if(!r||r.when===null||r.item.ignored||!r.item.id)return;openForm(null,{messageId:r.item.id,title:r.headline.slice(0,200),notes:[r.gist.text||r.item.summary||'',`${local('来源邮件：','來源郵件：','Source email: ')}${r.item.subject||r.headline}`].filter(Boolean).join('\n'),due:suggestedTaskDue(r.item,r.when),priority:r.tier==='act'?1:2});return;}
     const open=find('[data-dg-open]');
@@ -1122,13 +1170,13 @@ boot();
 // Profile and language settings override the legacy settings renderer above.
 async function loadSettingsProfile(){
   try{
-    status=await api('status');const p=await api('profile');const mailPrefs=p.mailPreferences||{focusTerms:[],daily:{enabled:true,time:'20:00'},late:{enabled:true,time:'00:00'},translateZh:true,englishSummary:false};p.locale=locale;
+    status=await api('status');const p=await api('profile');const mailPrefs=p.mailPreferences||{focusTerms:[],profile:'',daily:{enabled:true,time:'20:00'},late:{enabled:true,time:'00:00'},translateZh:true,englishSummary:false};p.locale=locale;
     const outlook=`<div class="setting-card"><h2>${tx('outlookMail')}</h2><p class="status">${status.outlook?esc(translateCopy(status.mailStatus))+(status.lastSync?' · '+esc(fmt(status.lastSync)):''):esc(tx('outlookNotConnected'))}</p>${status.outlook?`<p class="connection-detail">${esc(tx('connectedAs'))} ${esc(status.outlookEmail)}</p><p><button id="sync-outlook" type="button">${tx('syncNow')}</button> <a href="/api/outlook/start">${tx('reconnect')} ↗</a></p><p><button id="disconnect-outlook" type="button" class="danger-text">${tx('disconnectOutlook')}</button></p><small>${esc(tx('disconnectOutlookHint'))}</small>`:`<p class="connection-detail">${esc(tx('connectOutlookHint'))}</p>`}${status.outlookConfigured?(status.outlook?'':`<form id="outlook-connect-form" class="connection-form"><label>${tx('outlookEmail')}<input name="email" type="email" autocomplete="email" required></label><button class="primary" type="submit">${tx('connectOutlook')} ↗</button></form>`):`<div class="setup-block"><p class="error">${esc(tx('outlookSetupNeeded'))}</p><p>${esc(tx('outlookMissing'))} <code>${esc((status.outlookMissingConfig||[]).join(', '))}</code></p><small>${esc(tx('outlookSetupHelp'))}</small></div>`}${status.outlook?`<small>${esc(tx('syncSchoolOnly'))}</small>`:''}</div>`;
     const zhUi=p.locale==='zh-CN'||p.locale==='zh-TW';
     const aliasRows=(p.nameAliases||[]).map((a,i)=>aliasRowHTML(a,i)).join('');
     const zhNameField=zhUi?`<div class="name-aliases-block"><div class="alias-list" id="alias-list">${aliasRows}</div><div class="alias-actions"><button type="button" id="alias-add" class="chip-button">＋ ${tx('addAlias')}</button></div><div id="alias-suggestions" class="alias-suggestions"></div></div>`:'';
     const translateFields=zhUi?`<div class="zh-only-settings"><label><input type="checkbox" name="translateZh" ${mailPrefs.translateZh!==false?'checked':''}> ${tx('mailTranslateZh')}</label><label><input type="checkbox" name="englishSummary" ${mailPrefs.englishSummary?'checked':''}> ${tx('mailEnglishSummary')}</label><small>${tx('mailTranslateHelp')}</small></div>`:'';
-    const mailPreferences=`<div class="setting-card"><h2>${tx('mailNotifications')}</h2><p>${tx('mailReminderHelp')}</p><form id="mail-preferences-form"><label>${tx('focusTerms')}<textarea name="focusTerms" rows="4" maxlength="2400">${esc((mailPrefs.focusTerms||[]).join('\n'))}</textarea><small>${tx('focusTermsHelp')}</small></label><div class="settings-grid"><label><span><input type="checkbox" name="dailyEnabled" ${mailPrefs.daily.enabled?'checked':''}> ${tx('dailyDigest')}</span><input type="time" name="dailyTime" value="${esc(mailPrefs.daily.time)}"></label><label><span><input type="checkbox" name="lateEnabled" ${mailPrefs.late.enabled?'checked':''}> ${tx('lateDigest')}</span><input type="time" name="lateTime" value="${esc(mailPrefs.late.time)}"></label></div>${translateFields}<button class="primary" type="submit">${tx('saveMailPreferences')}</button></form></div>`;
+    const mailPreferences=`<div class="setting-card"><h2>${tx('mailNotifications')}</h2><p>${tx('mailReminderHelp')}</p><form id="mail-preferences-form"><label>${tx('focusTerms')}<textarea name="profile" rows="4" maxlength="800" placeholder="${esc(tx('focusTermsHelp'))}">${esc(mailPrefs.profile||'')}</textarea></label><div class="settings-grid"><label><span><input type="checkbox" name="dailyEnabled" ${mailPrefs.daily.enabled?'checked':''}> ${tx('dailyDigest')}</span><input type="time" name="dailyTime" value="${esc(mailPrefs.daily.time)}"></label><label><span><input type="checkbox" name="lateEnabled" ${mailPrefs.late.enabled?'checked':''}> ${tx('lateDigest')}</span><input type="time" name="lateTime" value="${esc(mailPrefs.late.time)}"></label></div>${translateFields}<button class="primary" type="submit">${tx('saveMailPreferences')}</button></form></div>`;
     const displayName=p.nickname||`${tx('defaultNickname')} ${String(status.account.userCode||'0000')}`;
     const hasAvatar=p.avatar&&p.avatar.startsWith('data:image/');
     const qqProfileCard=`<div class="setting-card qq-profile-card"><h2>${tx('profile')}</h2>
@@ -1181,7 +1229,7 @@ async function loadSettingsProfile(){
     $('#settings-content').innerHTML=qqProfileCard+`${outlook}${mailPreferences}<div class="setting-card"><h2>${local('通知渠道','通知渠道','Notification channels')}</h2><p>${local('iPhone：在 Safari 添加到主屏幕后，再开启通知。','iPhone：在 Safari 加入主畫面後，再開啟通知。','iPhone: add this site to your Home Screen in Safari before enabling notifications.')}</p><button id="enable-push" ${status.pushReady?'':'disabled'}>${local('在此设备启用通知','在此裝置啟用通知','Enable notifications on this device')}</button> <button id="test-push" ${status.pushReady?'':'disabled'}>${local('测试手机通知','測試手機通知','Test push notification')}</button></div><div class="setting-card"><h2>${tx('accountSecurity')}</h2><div class="settings-grid"><form id="password-form"><label>${tx('currentPassword')}<input name="current" type="password" required></label><label>${tx('newPassword')}<input name="next" type="password" minlength="12" required></label><button class="primary" type="submit">${tx('changePassword')}</button></form><form id="security-form"><label>${tx('currentPassword')}<input name="password" type="password" required></label><label>${tx('customQuestion')}<input name="question" required></label><label>${tx('answer')}<input name="answer" type="password" required></label><button type="submit">${tx('saveSecurity')}</button></form></div></div><div class="setting-card account-exit"><h2>${tx('signOutHere')}</h2><button type="button" id="settings-logout" class="danger-text">${tx('logout')}</button></div>`;
     const schoolForm=document.createElement('form');schoolForm.className='setting-card';schoolForm.innerHTML=`<label>${local('学校邮箱（用于识别转发邮件）','學校電郵（用於識別轉寄郵件）','School email (identifies forwarded mail)')}<input name="email" type="email" required value="${esc(status.schoolEmail||'')}"></label><button type="submit">${local('保存并重新同步','儲存並重新同步','Save and resync')}</button>`;$('#settings-content').children[1].after(schoolForm);
     schoolForm.onsubmit=async event=>{event.preventDefault();const button=schoolForm.querySelector('button');button.disabled=true;try{await api('school-email',{method:'PUT',body:{email:schoolForm.elements.email.value}});await api('outlook/sync',{method:'POST',body:{}});toast(local('学校邮箱已保存','學校電郵已儲存','School email saved'));}catch(error){toast(error.message);}finally{button.disabled=false;}};
-    const mailPreferencesForm=$('#mail-preferences-form');if(mailPreferencesForm)mailPreferencesForm.onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,button=f.querySelector('[type=submit]');button.disabled=true;try{const mailPreferences={focusTerms:[...new Set(f.elements.focusTerms.value.split(/[\n,，]/).map(x=>x.trim()).filter(Boolean))],daily:{enabled:f.elements.dailyEnabled.checked,time:f.elements.dailyTime.value},late:{enabled:f.elements.lateEnabled.checked,time:f.elements.lateTime.value},translateZh:f.elements.translateZh?f.elements.translateZh.checked:true,englishSummary:f.elements.englishSummary?f.elements.englishSummary.checked:false};await api('profile',{method:'PATCH',body:{mailPreferences}});toast(tx('mailPreferencesSaved'));}catch(err){toast(err.message);}finally{button.disabled=false;}};
+    const mailPreferencesForm=$('#mail-preferences-form');if(mailPreferencesForm)mailPreferencesForm.onsubmit=async e=>{e.preventDefault();const f=e.currentTarget,button=f.querySelector('[type=submit]');button.disabled=true;try{const mailPreferences={focusTerms:[],profile:f.elements.profile.value.trim(),daily:{enabled:f.elements.dailyEnabled.checked,time:f.elements.dailyTime.value},late:{enabled:f.elements.lateEnabled.checked,time:f.elements.lateTime.value},translateZh:f.elements.translateZh?f.elements.translateZh.checked:true,englishSummary:f.elements.englishSummary?f.elements.englishSummary.checked:false};await api('profile',{method:'PATCH',body:{mailPreferences}});toast(tx('mailPreferencesSaved'));}catch(err){toast(err.message);}finally{button.disabled=false;}};
     const outlookForm=$('#outlook-connect-form');if(outlookForm)outlookForm.onsubmit=e=>{e.preventDefault();const input=outlookForm.elements.email;if(!input.reportValidity())return;location.assign('/api/outlook/start?email='+encodeURIComponent(input.value.trim()));};
     const syncOutlook=$('#sync-outlook');if(syncOutlook)syncOutlook.onclick=async()=>{syncOutlook.disabled=true;syncOutlook.textContent=tx('syncing');try{const r=await api('outlook/sync',{method:'POST',body:{}});toast(tx('syncFinished').replace('{count}',r.imported));await loadMail();await loadSettingsProfile();}catch(err){toast(err.message);}finally{syncOutlook.disabled=false;}};
     const disconnectOutlook=$('#disconnect-outlook');if(disconnectOutlook)disconnectOutlook.onclick=async()=>{if(!await confirmDialog(tx('confirmDisconnectOutlook'),{danger:true,confirmText:tx('disconnectOutlook')}))return;disconnectOutlook.disabled=true;try{await api('outlook',{method:'DELETE',body:{}});toast(tx('outlookDisconnected'));await loadSettingsProfile();}catch(err){toast(err.message);disconnectOutlook.disabled=false;}};
